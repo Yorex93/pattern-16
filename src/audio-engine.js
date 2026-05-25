@@ -1,8 +1,6 @@
 // Pattern-16 audio engine — banks + chain + samples + sends + delay + offline render.
-// All vanilla JS. Exposes window.DrumEngine and window.renderOffline + window.encodeWav.
 
-(function () {
-  const ROW_IDS = ['kick', 'snare', 'chh', 'ohh', 'clap', 'tom'];
+const ROW_IDS = ['kick', 'snare', 'chh', 'ohh', 'clap', 'tom'];
   const VEL_GAIN = [0.5, 0.85, 1.0]; // soft / med / loud
   const DELAY_FRACTIONS = { '1/8': 0.5, '1/4': 1, '3/8': 1.5, '1/2': 2 }; // × quarter note
 
@@ -493,7 +491,7 @@
       clearInterval(progressTimer);
       cancelled = true;
       onProgress?.(1);
-      return buffer;
+      return { buffer, musicalDuration, tail, totalDuration };
     } catch (e) {
       clearInterval(progressTimer);
       cancelled = true;
@@ -514,46 +512,81 @@
   }
 
   // ============================================================
-  // Trim inaudible silent tail + linear fade-out
+  // Trim inaudible silent tail + smooth fade-out
   // ============================================================
-  // Scans the rendered buffer from the end for the last sample above
-  // ~-60 dBFS (across all channels), keeps a 100ms safety margin, then
-  // applies a 50ms linear fade-out to avoid a click at the cut.
+  // Uses windowed RMS (not per-sample peaks) so the random-noise content of
+  // the reverb IR doesn't fool the detector into keeping a long, perceptually
+  // silent tail. Threshold combines an absolute floor (~-50 dBFS) with a
+  // peak-relative floor (~-45 dB below peak). `minSamples` preserves the
+  // musical timeline so we never cut inside the composed pattern.
   function trimSilentTail(audioBuffer, opts = {}) {
-    const threshold = opts.threshold ?? 0.001;   // ~-60 dBFS
-    const safetyMs = opts.safetyMs ?? 100;
-    const fadeMs = opts.fadeMs ?? 50;
     const sampleRate = audioBuffer.sampleRate;
     const numChannels = audioBuffer.numberOfChannels;
     const totalSamples = audioBuffer.length;
+
+    const windowMs = opts.windowMs ?? 30;
+    const safetyMs = opts.safetyMs ?? 40;
+    const fadeMs = opts.fadeMs ?? 80;
+    const absoluteFloor = opts.absoluteFloor ?? 0.003;  // ~ -50 dBFS
+    const relativeRatio = opts.relativeRatio ?? 0.0056; // ~ -45 dB below peak
+    const minSamples = Math.max(0, Math.floor(opts.minSamples ?? 0));
+
+    const windowSamples = Math.max(1, Math.floor((windowMs / 1000) * sampleRate));
     const safetySamples = Math.floor((safetyMs / 1000) * sampleRate);
     const fadeSamples = Math.floor((fadeMs / 1000) * sampleRate);
 
-    // Find the latest audible sample across all channels.
-    let lastAudible = -1;
+    // Peak (absolute) across all channels — used to scale the relative floor
+    // so loud and quiet renders trim consistently.
+    let peak = 0;
     for (let ch = 0; ch < numChannels; ch++) {
       const data = audioBuffer.getChannelData(ch);
-      for (let i = totalSamples - 1; i >= 0; i--) {
-        if (Math.abs(data[i]) > threshold) {
-          if (i > lastAudible) lastAudible = i;
-          break;
-        }
+      for (let i = 0; i < totalSamples; i++) {
+        const v = data[i];
+        const a = v < 0 ? -v : v;
+        if (a > peak) peak = a;
       }
     }
+    const threshold = Math.max(absoluteFloor, relativeRatio * peak);
 
-    // If somehow the buffer is entirely below threshold (e.g. empty pattern),
-    // keep the first half second so the file isn't zero-length.
-    if (lastAudible < 0) {
-      lastAudible = Math.min(totalSamples - 1, Math.floor(0.5 * sampleRate));
+    // Walk backwards window-by-window, computing summed RMS across channels.
+    // Stop at the first window whose RMS exceeds the threshold — that's the
+    // last perceptually-audible content.
+    let lastAudibleSample = -1;
+    let end = totalSamples;
+    while (end > 0) {
+      const start = Math.max(0, end - windowSamples);
+      let sumSq = 0;
+      let count = 0;
+      for (let ch = 0; ch < numChannels; ch++) {
+        const data = audioBuffer.getChannelData(ch);
+        for (let i = start; i < end; i++) {
+          const v = data[i];
+          sumSq += v * v;
+          count++;
+        }
+      }
+      const rms = count > 0 ? Math.sqrt(sumSq / count) : 0;
+      if (rms > threshold) {
+        lastAudibleSample = end - 1;
+        break;
+      }
+      end = start;
     }
 
-    const trimmedLength = Math.min(totalSamples, lastAudible + 1 + safetySamples);
+    // Floor: never cut earlier than the composed musical timeline. This keeps
+    // intentional rests at the end of a bar intact.
+    if (lastAudibleSample < minSamples - 1) lastAudibleSample = minSamples - 1;
+
+    // Empty pattern fallback — keep a quarter second so the file isn't 0 bytes.
+    if (lastAudibleSample < 0) {
+      lastAudibleSample = Math.min(totalSamples - 1, Math.floor(0.25 * sampleRate));
+    }
+
+    const trimmedLength = Math.min(totalSamples, lastAudibleSample + 1 + safetySamples);
     if (trimmedLength >= totalSamples) {
       return audioBuffer; // Nothing to trim
     }
 
-    // Build new buffer. AudioBuffer constructor is well-supported in modern
-    // browsers; fall back to an OfflineAudioContext if not.
     let out;
     try {
       out = new AudioBuffer({ length: trimmedLength, numberOfChannels: numChannels, sampleRate });
@@ -566,9 +599,7 @@
     for (let ch = 0; ch < numChannels; ch++) {
       const src = audioBuffer.getChannelData(ch);
       const dst = out.getChannelData(ch);
-      // Bulk copy first
       dst.set(src.subarray(0, trimmedLength));
-      // Linear fade over the final fadeWindow samples
       for (let i = fadeStart; i < trimmedLength; i++) {
         const gain = 1 - (i - fadeStart) / fadeWindow;
         dst[i] *= gain;
@@ -576,7 +607,7 @@
     }
 
     const trimmedSec = (totalSamples - trimmedLength) / sampleRate;
-    console.log(`[Pattern-16 export] trimmed ${trimmedSec.toFixed(2)}s of sub-${threshold} tail · final ${(trimmedLength / sampleRate).toFixed(2)}s`);
+    console.log(`[Pattern-16 export] trimmed ${trimmedSec.toFixed(2)}s · final ${(trimmedLength / sampleRate).toFixed(2)}s · threshold ${threshold.toFixed(5)} · peak ${peak.toFixed(3)}`);
     return out;
   }
 
@@ -628,10 +659,4 @@
     return new Blob([ab], { type: 'audio/wav' });
   }
 
-  // Expose
-  window.DrumEngine = DrumEngine;
-  window.renderOffline = renderOffline;
-  window.trimSilentTail = trimSilentTail;
-  window.encodeWav = encodeWav;
-  window.DRUM_ROW_IDS = ROW_IDS;
-})();
+export { DrumEngine, renderOffline, trimSilentTail, encodeWav, ROW_IDS as DRUM_ROW_IDS };

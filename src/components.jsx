@@ -1,6 +1,5 @@
-/* global React */
-// Shared UI primitives for Pattern-16. Exposed on window for app.jsx.
-const { useState, useEffect, useRef } = React;
+// Shared UI primitives for Pattern-16.
+import { useState, useEffect, useRef } from 'react';
 
 function Splash({ onStart }) {
   return (
@@ -216,6 +215,4 @@ function Step({ cell, current, downbeat, onClick, onContextMenu, rowIndex, stepI
   );
 }
 
-Object.assign(window, {
-  Splash, Knob, MiniSend, VolumeSlider, PlayButton, BPMControl, Step,
-});
+export { Splash, Knob, MiniSend, VolumeSlider, PlayButton, BPMControl, Step };

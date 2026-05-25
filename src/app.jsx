@@ -1,6 +1,6 @@
-/* global React, ReactDOM, DrumEngine, renderOffline, encodeWav, DRUM_ROW_IDS,
-   Splash, Knob, MiniSend, VolumeSlider, PlayButton, BPMControl, Step */
-const { useState, useEffect, useRef, useCallback } = React;
+import { Fragment, useState, useEffect, useRef, useCallback } from 'react';
+import { DrumEngine, renderOffline, trimSilentTail, encodeWav } from './audio-engine.js';
+import { Splash, Knob, MiniSend, VolumeSlider, PlayButton, BPMControl, Step } from './components.jsx';
 
 const ROWS = [
   { id: 'kick',  label: 'KICK' },
@@ -515,12 +515,14 @@ function App() {
     if (playing) { engineRef.current.stop(); setPlaying(false); }
     setExporting(true); setExportProgress(0);
     try {
-      const audioBuffer = await renderOffline({
+      const { buffer: audioBuffer, musicalDuration } = await renderOffline({
         banks, chain, bpm, delayFeedback, delayTime,
         samples: Object.fromEntries(Object.entries(samples).map(([k, v]) => [k, v.buffer])),
         onProgress: setExportProgress,
       });
-      const trimmed = trimSilentTail(audioBuffer);
+      const trimmed = trimSilentTail(audioBuffer, {
+        minSamples: Math.floor(musicalDuration * audioBuffer.sampleRate),
+      });
       const blob = encodeWav(trimmed);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -689,7 +691,7 @@ function App() {
                 </div>
                 <div className="steps">
                   {bank.pattern[r.id].map((cell, si) => (
-                    <React.Fragment key={si}>
+                    <Fragment key={si}>
                       <Step
                         cell={cell}
                         current={playState.step === si}
@@ -700,7 +702,7 @@ function App() {
                         onContextMenu={(e) => onStepContext(r.id, si, e)}
                       />
                       {si % 4 === 3 && si < 15 && <span className="step-gap" />}
-                    </React.Fragment>
+                    </Fragment>
                   ))}
                 </div>
               </div>
@@ -714,12 +716,12 @@ function App() {
           </div>
           <div className="col-strip-steps">
             {Array.from({ length: 16 }).map((_, i) => (
-              <React.Fragment key={i}>
+              <Fragment key={i}>
                 <div className={`col-num ${playState.step === i ? 'active' : ''} ${i % 4 === 0 ? 'down' : ''}`}>
                   {i + 1}
                 </div>
                 {i % 4 === 3 && i < 15 && <span className="step-gap" />}
-              </React.Fragment>
+              </Fragment>
             ))}
           </div>
         </div>
@@ -747,4 +749,4 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+export default App;
