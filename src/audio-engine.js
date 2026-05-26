@@ -444,7 +444,11 @@ class DrumEngine {
           const noteStep = (n.step | 0) - 1;
           if (noteStep < 0 || noteStep > 15) continue;
           const noteTime = baseTime + noteStep * sixteenth;
-          const lengthSec = Math.max(1, (n.length | 0)) * sixteenth;
+          // Clamp note length so the gate-off never crosses the bar boundary.
+          // Multi-step sustain across bars/banks is a separate, harder problem.
+          const requested = Math.max(1, (n.length | 0));
+          const maxSteps = 16 - noteStep;
+          const lengthSec = Math.min(requested, maxSteps) * sixteenth;
           const cell = {
             on: true,
             velocity: n.velocity ?? 1,
@@ -623,7 +627,8 @@ async function renderOffline({ banks, chain, bpm, delayFeedback, delayTime, samp
             const noteStep = (n.step | 0) - 1;
             if (noteStep < 0 || noteStep > 15) continue;
             const noteTime = barStart + noteStep * sixteenth;
-            const lengthSec = Math.max(1, (n.length | 0)) * sixteenth;
+            const requested = Math.max(1, (n.length | 0));
+            const lengthSec = Math.min(requested, 16 - noteStep) * sixteenth;
             const cell = { on: true, velocity: n.velocity ?? 1, probability: n.probability ?? 100, note: n.pitch ?? slot.defaultNote, __lengthSec: lengthSec };
             triggerSlot(routing, slotIdx, noteTime, cell, slot, localSamples, barSec);
             hitCount++;

@@ -277,6 +277,37 @@ function triggerWoodblock(ctx, time, velocity, dest) {
 
 // ---------------- Helpers for pitched voices ----------------
 
+// Gated ADSR for pitched voices. Schedules attack, decay-to-sustain, hold
+// until gateSec, then release. If gateSec is shorter than attack+decay, the
+// sustain segment collapses and the envelope just plays attack-decay-release
+// (matches the voice's natural one-shot character). Grid-mode triggers pass
+// gateSec = one sixteenth, which keeps short-natural voices (pluck, chord-stab)
+// effectively identical to their old fire-and-forget behavior while letting
+// long-natural voices (pad, sub-bass) still play out their full character.
+//
+// Returns the time at which all oscillators connected to this gain should be
+// stopped (sustainEnd + release + a small buffer).
+function applyGatedEnvelope(gainParam, time, peak, attack, decay, sustainRatio, release, gateSec) {
+  const decayEnd = time + attack + decay;
+  const wantedClose = time + Math.max(0, gateSec);
+  const sustainEnd = Math.max(decayEnd, wantedClose);
+  const sustainLevel = Math.max(0.0001, sustainRatio * peak);
+  gainParam.setValueAtTime(0.0001, time);
+  gainParam.linearRampToValueAtTime(peak, time + attack);
+  gainParam.exponentialRampToValueAtTime(sustainLevel, decayEnd);
+  if (sustainEnd > decayEnd) gainParam.setValueAtTime(sustainLevel, sustainEnd);
+  gainParam.exponentialRampToValueAtTime(0.0001, sustainEnd + release);
+  return sustainEnd + release;
+}
+
+// Effective gate duration for a voice trigger. Melody notes set opts.lengthSec
+// explicitly; grid-mode notes fall back to one sixteenth so length-1 melody
+// matches grid-mode timing exactly.
+function effectiveGate(opts) {
+  const sixteenth = (opts.barSec ?? 2) / 16;
+  return opts.lengthSec ?? sixteenth;
+}
+
 // Schedule frequency: if glide, ramp from fromPitch to target over GLIDE_TIME.
 // Otherwise set immediately.
 function setPitch(oscOrParam, time, targetMidi, fromMidi) {
@@ -308,59 +339,63 @@ function makeSaturation(ctx, amount = 0.6) {
 
 // 808: sine with a +12 → note pitch envelope (40ms) and gentle saturation.
 // With glide, replace the +12 sweep with fromPitch → note (30ms).
+// 808: sine + downward pitch envelope + saturation. Gated amp envelope:
+//   attack 5ms, note-dependent decay (low notes longer), 50% sustain, release 200ms.
+// Pitch envelope is preserved verbatim — the signature downward sweep still
+// fires whether the note is length-1 or length-8.
 function trigger808(ctx, time, velocity, dest, opts = {}) {
   const note = opts.note ?? 36;
   const from = opts.fromPitch;
+  const gateSec = effectiveGate(opts);
   const osc = ctx.createOscillator();
   osc.type = 'sine';
   if (from != null) {
     osc.frequency.setValueAtTime(midiToFreq(from), time);
     osc.frequency.exponentialRampToValueAtTime(midiToFreq(note), time + GLIDE_TIME);
   } else {
-    // Signature: start an octave above, glide down to note over 40ms
     osc.frequency.setValueAtTime(midiToFreq(note + 12), time);
     osc.frequency.exponentialRampToValueAtTime(midiToFreq(note), time + 0.04);
   }
-  // Decay length scales gently with how low the note is (low notes ring longer)
+  // Decay scales with note pitch (low notes ring longer), as before.
   const decay = Math.min(2.0, 0.6 + (60 - note) * 0.03);
   const g = ctx.createGain();
-  g.gain.setValueAtTime(0.0001, time);
-  g.gain.exponentialRampToValueAtTime(0.95, time + 0.005);
-  g.gain.exponentialRampToValueAtTime(0.0001, time + decay);
+  const stopAt = applyGatedEnvelope(g.gain, time, 0.95, 0.005, decay, 0.50, 0.200, gateSec);
   const sat = makeSaturation(ctx, 0.45);
   osc.connect(sat).connect(g).connect(dest);
-  osc.start(time); osc.stop(time + decay + 0.05);
+  osc.start(time); osc.stop(stopAt + 0.05);
 }
 
-// Sub bass: pure sine, no pitch envelope, ~400ms decay.
+// Sub bass: pure sine. Gated amp envelope:
+//   attack 8ms, decay 250ms to 70% sustain, release 160ms.
 function triggerSubBass(ctx, time, velocity, dest, opts = {}) {
   const note = opts.note ?? 36;
   const from = opts.fromPitch;
+  const gateSec = effectiveGate(opts);
   const osc = ctx.createOscillator();
   osc.type = 'sine';
   setPitch(osc, time, note, from);
   const g = ctx.createGain();
-  g.gain.setValueAtTime(0.0001, time);
-  g.gain.exponentialRampToValueAtTime(1.0, time + 0.008);
-  g.gain.exponentialRampToValueAtTime(0.0001, time + 0.42);
+  const stopAt = applyGatedEnvelope(g.gain, time, 1.0, 0.008, 0.250, 0.70, 0.160, gateSec);
   osc.connect(g).connect(dest);
-  osc.start(time); osc.stop(time + 0.45);
+  osc.start(time); osc.stop(stopAt + 0.05);
 }
 
-// Synth bass: saw through resonant lowpass with downward filter envelope.
+// Synth bass: saw + filter envelope. Gated amp envelope:
+//   attack 6ms, decay 180ms to 30% sustain, release 130ms.
+// The filter envelope still does its own downward sweep over ~180ms regardless
+// of length — that's the voice's character.
 function triggerSynthBass(ctx, time, velocity, dest, opts = {}) {
   const note = opts.note ?? 36;
   const from = opts.fromPitch;
   const filterParams = opts.filter ?? { cutoff: 0.5, resonance: 0.2 };
   const cutoff01 = filterParams.cutoff;
   const reso01 = filterParams.resonance;
+  const gateSec = effectiveGate(opts);
 
   const osc = ctx.createOscillator();
   osc.type = 'sawtooth';
   setPitch(osc, time, note, from);
 
-  // Cutoff floor scales exponentially with the cutoff knob (~80Hz to ~4kHz),
-  // and velocity opens the filter slightly so loud notes sound brighter.
   const baseHz = 80 * Math.pow(50, cutoff01);
   const velBoost = 1 + (velocity === 2 ? 0.6 : velocity === 0 ? -0.25 : 0);
   const peakHz = Math.min(8000, baseHz * 4 * velBoost);
@@ -371,12 +406,10 @@ function triggerSynthBass(ctx, time, velocity, dest, opts = {}) {
   lp.frequency.exponentialRampToValueAtTime(Math.max(60, baseHz), time + 0.18);
 
   const g = ctx.createGain();
-  g.gain.setValueAtTime(0.0001, time);
-  g.gain.linearRampToValueAtTime(0.6, time + 0.006);
-  g.gain.exponentialRampToValueAtTime(0.0001, time + 0.32);
+  const stopAt = applyGatedEnvelope(g.gain, time, 0.6, 0.006, 0.180, 0.30, 0.130, gateSec);
 
   osc.connect(lp).connect(g).connect(dest);
-  osc.start(time); osc.stop(time + 0.35);
+  osc.start(time); osc.stop(stopAt + 0.05);
 }
 
 // ---------------- Tonal ----------------
@@ -389,7 +422,8 @@ const CHORD_INTERVALS = {
   maj7:  [0, 4, 7, 11],
 };
 
-// Chord stab: detuned saws per chord interval through lowpass, slight chorus.
+// Chord stab: detuned saws per chord interval through lowpass. Gated amp envelope:
+//   attack 6ms, decay 140ms to 20% sustain, release 150ms.
 function triggerChordStab(ctx, time, velocity, dest, opts = {}) {
   const root = opts.note ?? 48;
   const from = opts.fromPitch;
@@ -397,6 +431,7 @@ function triggerChordStab(ctx, time, velocity, dest, opts = {}) {
   const intervals = CHORD_INTERVALS[opts.chord] ?? CHORD_INTERVALS.minor;
   const cutoff01 = filterParams.cutoff;
   const reso01 = filterParams.resonance;
+  const gateSec = effectiveGate(opts);
 
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
@@ -404,13 +439,11 @@ function triggerChordStab(ctx, time, velocity, dest, opts = {}) {
   lp.Q.value = 0.7 + reso01 * 8;
 
   const g = ctx.createGain();
-  g.gain.setValueAtTime(0.0001, time);
-  g.gain.linearRampToValueAtTime(0.45, time + 0.006);
-  g.gain.exponentialRampToValueAtTime(0.0001, time + 0.22);
+  const stopAt = applyGatedEnvelope(g.gain, time, 0.45, 0.006, 0.140, 0.20, 0.150, gateSec);
 
   lp.connect(g).connect(dest);
 
-  // Two detuned oscs per chord note → chorusy character
+  // Two detuned oscs per chord note → chorusy character. All share the gated gain.
   const detunes = [-6, +6];
   for (const interval of intervals) {
     for (const detuneCents of detunes) {
@@ -423,18 +456,20 @@ function triggerChordStab(ctx, time, velocity, dest, opts = {}) {
       const og = ctx.createGain();
       og.gain.value = 0.32 / intervals.length;
       osc.connect(og).connect(lp);
-      osc.start(time); osc.stop(time + 0.26);
+      osc.start(time); osc.stop(stopAt + 0.05);
     }
   }
 }
 
-// Pluck: single saw through fast lowpass + fast amp envelope.
+// Pluck: single saw through fast lowpass + gated amp envelope.
+//   attack 3ms, decay 80ms to 10% sustain, release 80ms.
 function triggerPluck(ctx, time, velocity, dest, opts = {}) {
   const note = opts.note ?? 48;
   const from = opts.fromPitch;
   const filterParams = opts.filter ?? { cutoff: 0.55, resonance: 0.1 };
   const cutoff01 = filterParams.cutoff;
   const reso01 = filterParams.resonance;
+  const gateSec = effectiveGate(opts);
 
   const osc = ctx.createOscillator();
   osc.type = 'sawtooth';
@@ -448,12 +483,10 @@ function triggerPluck(ctx, time, velocity, dest, opts = {}) {
   lp.frequency.exponentialRampToValueAtTime(Math.max(150, baseHz), time + 0.08);
 
   const g = ctx.createGain();
-  g.gain.setValueAtTime(0.0001, time);
-  g.gain.linearRampToValueAtTime(0.55, time + 0.003);
-  g.gain.exponentialRampToValueAtTime(0.0001, time + 0.16);
+  const stopAt = applyGatedEnvelope(g.gain, time, 0.55, 0.003, 0.080, 0.10, 0.080, gateSec);
 
   osc.connect(lp).connect(g).connect(dest);
-  osc.start(time); osc.stop(time + 0.2);
+  osc.start(time); osc.stop(stopAt + 0.05);
 }
 
 // Vinyl crackle: brief noisy texture with random pops, ~150ms.
@@ -587,6 +620,10 @@ function triggerDjembe(ctx, time, velocity, dest, opts = {}) {
 
 // Acid bass: 303-style squelch. Saw → resonant lowpass with strong filter env.
 // envAmount controls how much the filter sweeps from peak down to base.
+// Acid bass: 303-style squelch. Gated amp envelope:
+//   attack 5ms, decay 200ms to 40% sustain, release 200ms.
+// Filter envelope (the voice's signature character) is untouched — it still
+// sweeps from peak to base over ~220ms regardless of gate length.
 function triggerAcidBass(ctx, time, velocity, dest, opts = {}) {
   const note = opts.note ?? 36;
   const from = opts.fromPitch;
@@ -594,92 +631,96 @@ function triggerAcidBass(ctx, time, velocity, dest, opts = {}) {
   const cutoff01 = f.cutoff;
   const reso01 = f.resonance;
   const envAmt = f.envAmount ?? 0.75;
+  const gateSec = effectiveGate(opts);
 
   const osc = ctx.createOscillator();
   osc.type = 'sawtooth';
   setPitch(osc, time, note, from);
 
   const baseHz = 180 * Math.pow(30, cutoff01);
-  // Filter env can sweep up to ~10× base × envAmount factor
   const peakHz = Math.min(12000, baseHz * (1 + 15 * envAmt) * (velocity === 2 ? 1.4 : velocity === 0 ? 0.8 : 1));
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
-  // Resonance can go squealy — don't conservatively cap it
   lp.Q.value = 1 + reso01 * 28;
   lp.frequency.setValueAtTime(peakHz, time);
   lp.frequency.exponentialRampToValueAtTime(Math.max(80, baseHz), time + 0.22);
 
   const g = ctx.createGain();
-  g.gain.setValueAtTime(0.0001, time);
-  g.gain.linearRampToValueAtTime(0.55, time + 0.005);
-  g.gain.exponentialRampToValueAtTime(0.0001, time + 0.4);
+  const stopAt = applyGatedEnvelope(g.gain, time, 0.55, 0.005, 0.200, 0.40, 0.200, gateSec);
 
   osc.connect(lp).connect(g).connect(dest);
-  osc.start(time); osc.stop(time + 0.45);
+  osc.start(time); osc.stop(stopAt + 0.05);
 }
 
-// Reese bass: two saws detuned ~15 cents, slow LFO on filter cutoff, longish decay.
+// Reese bass: two detuned saws + LFO on filter cutoff. Gated amp envelope:
+//   attack 10ms, decay 400ms to 90% sustain (it sustains nearly full), release 290ms.
+// LFO duration scales with the gate so long notes get the full filter motion.
 function triggerReeseBass(ctx, time, velocity, dest, opts = {}) {
   const note = opts.note ?? 36;
   const from = opts.fromPitch;
   const f = opts.filter ?? { cutoff: 0.45, resonance: 0.15 };
-  const dur = 0.7;
+  const gateSec = effectiveGate(opts);
+  // LFO spans the gated portion; cap at 6 s so the precomputed buffer stays small.
+  const lfoDur = Math.min(6, Math.max(0.3, gateSec));
 
   const merge = ctx.createGain();
   merge.gain.value = 0.5;
+  const stopBuffer = 0.05;
+
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.Q.value = 1 + f.resonance * 4;
+  const baseHz = 200 * Math.pow(18, f.cutoff);
+  // LFO modulation across the gated note length.
+  const samples = Math.max(16, Math.round(32 * (lfoDur / 0.7)));
+  const curve = new Float32Array(samples);
+  for (let i = 0; i < samples; i++) {
+    const phase = (i / samples) * Math.PI * 2 * 1.5;
+    curve[i] = Math.max(80, baseHz * (1 + 0.35 * Math.sin(phase)));
+  }
+  lp.frequency.setValueCurveAtTime(curve, time, lfoDur * 0.99);
+
+  const g = ctx.createGain();
+  const stopAt = applyGatedEnvelope(g.gain, time, 0.55, 0.010, 0.400, 0.90, 0.290, gateSec);
+
   for (const dt of [-15, +15]) {
     const osc = ctx.createOscillator();
     osc.type = 'sawtooth';
     osc.detune.value = dt;
     setPitch(osc, time, note, from);
     osc.connect(merge);
-    osc.start(time); osc.stop(time + dur);
+    osc.start(time); osc.stop(stopAt + stopBuffer);
   }
-
-  const lp = ctx.createBiquadFilter();
-  lp.type = 'lowpass';
-  lp.Q.value = 1 + f.resonance * 4;
-  const baseHz = 200 * Math.pow(18, f.cutoff);
-  // Slow LFO modulation across the note length via setValueCurveAtTime
-  const samples = 32;
-  const curve = new Float32Array(samples);
-  for (let i = 0; i < samples; i++) {
-    const phase = (i / samples) * Math.PI * 2 * 1.5; // ~1.5 cycles per note
-    curve[i] = Math.max(80, baseHz * (1 + 0.35 * Math.sin(phase)));
-  }
-  lp.frequency.setValueCurveAtTime(curve, time, dur * 0.95);
-
-  const g = ctx.createGain();
-  g.gain.setValueAtTime(0.0001, time);
-  g.gain.linearRampToValueAtTime(0.55, time + 0.01);
-  g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
-
   merge.connect(lp).connect(g).connect(dest);
 }
 
 // ---------------- Tonal (additions) ----------------
 
-// Pad: slow-evolving sustained chord. Multiple detuned saws per chord interval
-// with slow attack, long decay, gentle lowpass sweep.
+// Pad: slow-evolving sustained chord. Gated amp envelope:
+//   attack 200ms (the slow-attack character is what makes this read as a pad),
+//   decay 800ms to 80% sustain, release 900ms.
+// Length-1 at typical BPM still resolves through the natural decayEnd because
+// gateSec < attack+decay; in that case sustain segment collapses and the pad
+// plays its natural ~1.9 s envelope.
 function triggerPad(ctx, time, velocity, dest, opts = {}) {
   const root = opts.note ?? 48;
   const from = opts.fromPitch;
   const intervals = CHORD_INTERVALS[opts.chord] ?? CHORD_INTERVALS.minor;
   const f = opts.filter ?? { cutoff: 0.5, resonance: 0.1 };
-  const dur = 1.9;
+  const gateSec = effectiveGate(opts);
+
+  // Filter sweep scales with the gate length so longer pads keep evolving.
+  const sweepDur = Math.max(1.0, gateSec + 0.5);
 
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
   const baseHz = 400 + 5500 * f.cutoff;
   lp.frequency.setValueAtTime(baseHz * 0.55, time);
-  lp.frequency.linearRampToValueAtTime(baseHz, time + dur * 0.6);
+  lp.frequency.linearRampToValueAtTime(baseHz, time + sweepDur * 0.6);
   lp.Q.value = 0.7 + f.resonance * 5;
 
   const g = ctx.createGain();
-  g.gain.setValueAtTime(0.0001, time);
-  // Slow attack (~200ms) then long decay
-  g.gain.linearRampToValueAtTime(0.3, time + 0.2);
-  g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+  const stopAt = applyGatedEnvelope(g.gain, time, 0.3, 0.200, 0.800, 0.80, 0.900, gateSec);
 
   lp.connect(g).connect(dest);
 
@@ -695,7 +736,7 @@ function triggerPad(ctx, time, velocity, dest, opts = {}) {
       const og = ctx.createGain();
       og.gain.value = 0.18 / intervals.length;
       osc.connect(og).connect(lp);
-      osc.start(time); osc.stop(time + dur + 0.1);
+      osc.start(time); osc.stop(stopAt + 0.1);
     }
   }
 }

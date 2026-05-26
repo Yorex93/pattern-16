@@ -1149,6 +1149,17 @@ MELODY MODE GUIDANCE
 - Multi-step notes in melody mode hold the voice gate open — perfect for evolving pads and long bass notes.
 - Chord stab can voice an actual chord by placing several melody items at the same step (e.g. step 5 with pitches A3, C4, E4 for an Am triad). The slot's chordType setting also handles voicing; melody mode lets you spell chords explicitly.
 
+LENGTH HEURISTICS (per voice)
+Multi-step lengths are how melody mode produces sustained, musical notes. A pad with all length-1 notes will sound like a chord stab. Use length deliberately to differentiate sustained voices from percussive ones.
+- pad: length 4–8 (half-bar+) per note. A single length-16 pad covers the whole bar.
+- sub-bass: length 4–8 for sustained low end; length 1–2 if functioning as a percussive bass-pluck.
+- chord-stab: length 2–4 for chord progressions; length 1 is fine for sparse stabs.
+- reese-bass: length 4–16 — the slow filter LFO needs time to breathe.
+- pluck / lead: length 1–2; the voice's character is still mostly percussive.
+- 808 with glide: length 2–4 so the portamento between notes has time to slide.
+- acid-bass: length 1–2 typically; the filter envelope does the work, not the gate.
+- synth-bass: length 1–3 depending on rhythm.
+
 
 
 # OUTPUT CONTRACT (READ THIS FIRST)
