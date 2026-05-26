@@ -703,6 +703,170 @@
     text-align: center;
   }
 
+  /* JSON cluster (Import / Export / AI) */
+  .json-cluster {
+    display: flex;
+    flex-direction: column;
+    background: #100c09;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 4px 8px 6px;
+    gap: 4px;
+    min-width: 0;
+  }
+  .json-cluster-label {
+    font-size: 9px; letter-spacing: 0.3em; color: var(--ink-faint);
+  }
+  .json-cluster-btns { display: flex; gap: 3px; }
+  .json-cluster-btn {
+    height: 22px;
+    padding: 0 8px;
+    background: linear-gradient(180deg, #1c1812, #14100c);
+    border: 1px solid var(--line);
+    color: var(--ink-dim);
+    border-radius: 4px;
+    font-size: 9px; font-weight: 700; letter-spacing: 0.18em;
+    box-shadow: var(--shadow-inset);
+    transition: all 0.12s;
+  }
+  .json-cluster-btn:hover { color: var(--accent); border-color: var(--line-2); transform: translateY(-1px); }
+  .json-cluster-btn.ai {
+    background: linear-gradient(180deg, #1f1a25, #15101c);
+    color: oklch(0.78 0.13 295);
+    border-color: oklch(0.4 0.10 295 / 0.5);
+  }
+  .json-cluster-btn.ai:hover { color: oklch(0.88 0.15 295); border-color: oklch(0.55 0.13 295); box-shadow: 0 0 8px oklch(0.55 0.13 295 / 0.35), var(--shadow-inset); }
+
+  /* Wide modal variant for JSON import/export */
+  .modal-wide { width: min(720px, 94vw); }
+  .modal-header {
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .modal-close {
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--ink-dim);
+    width: 22px; height: 22px;
+    border-radius: 4px;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0;
+    display: grid; place-items: center;
+  }
+  .modal-close:hover { color: var(--ink); border-color: var(--line-2); }
+
+  .modal-actions {
+    display: flex; justify-content: flex-end; gap: 8px;
+    margin-top: 16px;
+  }
+
+  .json-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    height: 32px;
+    padding: 0 14px;
+    background: linear-gradient(180deg, #1c1812, #14100c);
+    border: 1px solid var(--line);
+    color: var(--ink-dim);
+    border-radius: 6px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.2em;
+    font-family: inherit;
+    box-shadow: var(--shadow-inset);
+    transition: all 0.15s;
+    cursor: pointer;
+  }
+  .json-btn:hover { color: var(--accent); border-color: var(--line-2); transform: translateY(-1px); }
+  .json-btn.ghost { color: var(--ink-faint); }
+  .json-btn.primary {
+    background: linear-gradient(180deg, oklch(0.78 0.16 65), oklch(0.62 0.18 55));
+    color: #1a0f04;
+    border-color: oklch(0.5 0.15 50);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), 0 0 12px rgba(245,168,80,0.3);
+  }
+  .json-btn.primary:hover { color: #1a0f04; transform: translateY(-1px); box-shadow: inset 0 1px 0 rgba(255,255,255,0.25), 0 0 18px rgba(245,168,80,0.45); }
+
+  .json-import-actions {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 12px;
+  }
+  .json-file-name {
+    font-size: 10px; letter-spacing: 0.08em; color: var(--ink-faint);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  .json-textarea {
+    width: 100%;
+    min-height: 220px;
+    max-height: 360px;
+    background: #0a0807;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--ink);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    padding: 10px 12px;
+    resize: vertical;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
+  }
+  .json-textarea:focus { outline: none; border-color: var(--accent); box-shadow: inset 0 1px 2px rgba(0,0,0,0.6), 0 0 0 1px var(--accent-soft); }
+
+  .json-pre {
+    background: #0a0807;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--ink);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    padding: 10px 12px;
+    margin: 0;
+    max-height: 360px;
+    overflow: auto;
+    white-space: pre;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
+  }
+
+  .json-name-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .json-name-label { font-size: 9px; letter-spacing: 0.3em; color: var(--ink-faint); }
+  .json-name-input {
+    flex: 1;
+    background: #0a0807;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    color: var(--ink);
+    font-family: inherit;
+    font-size: 12px;
+    padding: 6px 10px;
+  }
+  .json-name-input:focus { outline: none; border-color: var(--accent); }
+
+  .json-errors, .json-warnings {
+    margin-top: 12px;
+    border: 1px solid oklch(0.4 0.16 25 / 0.5);
+    background: oklch(0.2 0.06 25 / 0.25);
+    border-radius: 6px;
+    padding: 10px 12px;
+    max-height: 200px;
+    overflow: auto;
+  }
+  .json-warnings { border-color: oklch(0.45 0.10 70 / 0.4); background: oklch(0.2 0.04 70 / 0.18); }
+  .json-errors-title, .json-warnings-title {
+    font-size: 9px; letter-spacing: 0.3em; color: var(--red); margin-bottom: 6px; font-weight: 700;
+  }
+  .json-warnings-title { color: var(--accent); }
+  .json-errors ul, .json-warnings ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 5px; }
+  .json-errors li, .json-warnings li { font-size: 11px; color: var(--ink); line-height: 1.45; display: flex; gap: 6px; flex-wrap: wrap; }
+  .json-err-path {
+    background: rgba(0,0,0,0.4);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 0 5px;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 10px;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+
   /* Toast */
   .toast {
     position: fixed;
@@ -718,6 +882,11 @@
     z-index: 90;
     animation: toastIn 0.25s ease-out;
     max-width: 480px;
+  }
+  .toast.ok {
+    border-color: oklch(0.5 0.14 145 / 0.5);
+    box-shadow: 0 10px 40px rgba(0,0,0,0.7), 0 0 18px oklch(0.6 0.14 145 / 0.25);
+    color: oklch(0.92 0.10 145);
   }
   @keyframes toastIn {
     from { opacity: 0; transform: translate(-50%, 8px); }

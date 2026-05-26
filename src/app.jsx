@@ -1,6 +1,8 @@
 import { Fragment, useState, useEffect, useRef, useCallback } from 'react';
 import { DrumEngine, renderOffline, trimSilentTail, encodeWav } from './audio-engine.js';
 import { Splash, Knob, MiniSend, VolumeSlider, PlayButton, BPMControl, Step } from './components.jsx';
+import { ImportJsonModal, ExportJsonModal } from './json-modals.jsx';
+import { AI_SYSTEM_PROMPT } from './json-io.js';
 
 const ROWS = [
   { id: 'kick',  label: 'KICK' },
@@ -307,7 +309,10 @@ function Toast({ message, onClose }) {
     return () => clearTimeout(t);
   }, [message, onClose]);
   if (!message) return null;
-  return <div className="toast">{message}</div>;
+  const isObj = typeof message === 'object';
+  const text = isObj ? message.text : message;
+  const kind = isObj ? message.kind : null;
+  return <div className={`toast ${kind === 'ok' ? 'ok' : ''}`}>{text}</div>;
 }
 
 // ============================================================
@@ -340,6 +345,10 @@ function App() {
 
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
+
+  const [patternName, setPatternName] = useState('untitled');
+  const [importOpen, setImportOpen] = useState(false);
+  const [exportJsonOpen, setExportJsonOpen] = useState(false);
 
   const engineRef = useRef(null);
   const rafRef = useRef(null);
@@ -482,6 +491,31 @@ function App() {
     setActivePreset(null);
   };
 
+  // ----- JSON import / AI prompt -----
+  const handleJsonImport = (value, warnings) => {
+    setBanks(value.banks);
+    setChain(value.chain);
+    setBpmState(value.bpm);
+    setDelayFeedback(value.delayFeedback);
+    setDelayTime(value.delayTime);
+    setPatternName(value.name);
+    const firstPresent = value.bankPresent.findIndex(Boolean);
+    setEditBank(firstPresent >= 0 ? firstPresent : 0);
+    setActivePreset(null);
+    setImportOpen(false);
+    const w = warnings?.length ? ` (${warnings.length} warning${warnings.length > 1 ? 's' : ''})` : '';
+    setToast({ kind: 'ok', text: `Loaded: ${value.name}${w}` });
+  };
+
+  const copyAiPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(AI_SYSTEM_PROMPT);
+      setToast({ kind: 'ok', text: 'AI prompt copied — paste into Claude or ChatGPT, then bring the JSON back via IMPORT.' });
+    } catch {
+      setToast('Clipboard blocked — open Export instead and copy manually.');
+    }
+  };
+
   // ----- Samples -----
   const loadSample = async (rowId, file) => {
     if (!engineRef.current?.ctx) return;
@@ -592,6 +626,14 @@ function App() {
             <div className="meter-label">STEP</div>
             <div className="meter-val">
               {String((playState.step < 0 ? 0 : playState.step) + 1).padStart(2, '0')}/16
+            </div>
+          </div>
+          <div className="json-cluster" title="JSON pattern interchange">
+            <div className="json-cluster-label">JSON</div>
+            <div className="json-cluster-btns">
+              <button className="json-cluster-btn" onClick={() => setImportOpen(true)} title="Import pattern from JSON">IMPORT</button>
+              <button className="json-cluster-btn" onClick={() => setExportJsonOpen(true)} title="Export current pattern as JSON">EXPORT</button>
+              <button className="json-cluster-btn ai" onClick={copyAiPrompt} title="Copy AI system prompt to clipboard">AI</button>
             </div>
           </div>
         </div>
@@ -744,6 +786,19 @@ function App() {
       </div>
 
       {exporting && <ExportModal progress={exportProgress} onCancel={() => {}} />}
+      {importOpen && (
+        <ImportJsonModal
+          onClose={() => setImportOpen(false)}
+          onLoad={handleJsonImport}
+        />
+      )}
+      {exportJsonOpen && (
+        <ExportJsonModal
+          state={{ name: patternName, bpm, banks, chain, delayTime, delayFeedback, editBank }}
+          onClose={() => setExportJsonOpen(false)}
+          onToast={(text) => setToast({ kind: 'ok', text })}
+        />
+      )}
       <Toast message={toast} onClose={() => setToast(null)} />
     </div>
   );
