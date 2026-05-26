@@ -102,16 +102,16 @@ export function parsePattern(json) {
     return { ok: false, errors: [{ path: '', message: 'Expected a JSON object at the top level.' }], warnings: [] };
   }
 
-  // version — accept 1 (migrate) or 2 (current)
+  // version — accept 1 (migrate), 2 (no kit field), or 3 (current)
   if (!('version' in obj)) {
-    errors.push({ path: 'version', message: 'Missing required "version" field. Expected 2 (or 1 to be migrated).' });
+    errors.push({ path: 'version', message: 'Missing required "version" field. Expected 3 (or 1/2 to be migrated).' });
   } else if (obj.version === 1) {
     return parseV1ThenMigrate(obj);
-  } else if (obj.version !== 2) {
-    if (isFiniteNumber(obj.version) && obj.version > 2) {
-      return { ok: false, errors: [{ path: 'version', message: `This file uses schema version ${obj.version}; this app supports version 2.` }], warnings: [] };
+  } else if (obj.version !== 2 && obj.version !== 3) {
+    if (isFiniteNumber(obj.version) && obj.version > 3) {
+      return { ok: false, errors: [{ path: 'version', message: `This file uses schema version ${obj.version}; this app supports version 3.` }], warnings: [] };
     }
-    errors.push({ path: 'version', message: 'version must equal 2 (or 1 for migration).' });
+    errors.push({ path: 'version', message: 'version must equal 3 (or 1/2 for migration).' });
   }
 
   const name = (typeof obj.name === 'string' && obj.name.trim()) ? obj.name.trim() : 'untitled';
@@ -183,7 +183,15 @@ export function parsePattern(json) {
     });
   }
 
-  const KNOWN_TOP = new Set(['version', 'name', 'bpm', 'swing', 'sends', 'banks', 'chain']);
+  // Optional top-level "kit" string (v3+); v2 files just don't have it.
+  let kitId = null;
+  if ('kit' in obj) {
+    if (obj.kit === null) kitId = null;
+    else if (typeof obj.kit !== 'string') errors.push({ path: 'kit', message: 'kit must be a string id (e.g. "boom-bap") or null.' });
+    else kitId = obj.kit;
+  }
+
+  const KNOWN_TOP = new Set(['version', 'name', 'bpm', 'swing', 'sends', 'banks', 'chain', 'kit']);
   for (const k of Object.keys(obj)) if (!KNOWN_TOP.has(k)) warnings.push({ path: k, message: `Unknown top-level key "${k}" — ignored.` });
 
   if (errors.length > 0) return { ok: false, errors, warnings };
@@ -205,6 +213,7 @@ export function parsePattern(json) {
       banks: normalizedBanks,
       bankPresent: bankExplicitlyNull.map((n, i) => !n && banks[i] !== null),
       chain: chainIdx,
+      kit: kitId,
     },
   };
 }
@@ -307,6 +316,7 @@ function parseV1ThenMigrate(v1) {
       banks: normalizedBanks,
       bankPresent: bankNull.map((n, i) => !n && banks[i] !== null),
       chain: chainIdx,
+      kit: null,
     },
   };
 }
@@ -442,7 +452,7 @@ function parseSlot(v, base, errors, warnings) {
 
 // ---------- serializer ----------
 export function serializePattern(state) {
-  const { name, bpm, banks, chain, delayTime, delayFeedback, editBank } = state;
+  const { name, bpm, banks, chain, delayTime, delayFeedback, editBank, kit } = state;
   const refBank = banks[editBank] ?? banks.find(b => !bankIsEmpty(b)) ?? banks[0];
   const swInt = refBank?.swing ?? 0;
   const rev = refBank?.reverbAmount ?? 0.25;
@@ -453,8 +463,8 @@ export function serializePattern(state) {
     banksObj[L] = bankIsEmpty(b) ? null : bankToJson(b);
   });
 
-  return {
-    version: 2,
+  const out = {
+    version: 3,
     name: (name && name.trim()) || 'untitled',
     bpm,
     swing: Math.round(swInt) / 100,
@@ -465,6 +475,8 @@ export function serializePattern(state) {
     banks: banksObj,
     chain: chain.map(i => BANK_LETTERS[i]),
   };
+  if (kit) out.kit = kit;
+  return out;
 }
 
 function bankToJson(b) {
@@ -521,12 +533,13 @@ function slotToJson(s) {
 // ---------- AI prompt ----------
 export const AI_SYSTEM_PROMPT = `You are helping a user design a drum + bass + chord pattern for Pattern-16, a 16-step machine with 8 assignable slots per bank. Output a single JSON object matching the schema below. Output JSON only — no commentary, no markdown fences.
 
-SCHEMA (version 2)
+SCHEMA (version 3)
 {
-  "version": 2,
+  "version": 3,
   "name": "<short name>",
   "bpm": <60-180>,
   "swing": <0-0.66, use 0 for straight, ~0.56 for boom-bap, ~0.2 for subtle shuffle>,
+  "kit": <optional kit id, see KITS below; display only>,
   "sends": {
     "reverb": { "amount": <0-1> },
     "delay":  { "time": "1/8"|"1/4"|"3/8"|"1/2", "feedback": <0-1> }
@@ -539,11 +552,11 @@ SCHEMA (version 2)
                "steps": "<16 chars>",
                // optional:
                "probability": "<16 chars>",
-               "glide": <true|false>,                      // pitched slots only
-               "notes": [<16 ints, semitone offsets from the sound's default pitch>],  // pitched slots only; omit if every step is at default
-               "filter": { "cutoff": <0-1>, "resonance": <0-1> },                     // synth-bass / chord-stab / pluck only
-               "chordType": "major"|"minor"|"sus4"|"m7"|"maj7",                       // chord-stab only
-               "tunable": "low"|"mid"|"high"                                           // conga only
+               "glide": <true|false>,                       // pitched slots only
+               "notes": [<16 ints, semitone offsets from the sound's default pitch>],   // pitched slots only; omit if every step is at default
+               "filter": { "cutoff": <0-1>, "resonance": <0-1>, "envAmount": <0-1> },   // synth-bass / acid-bass / reese-bass / chord-stab / pad / pluck (envAmount: acid-bass only)
+               "chordType": "major"|"minor"|"sus4"|"m7"|"maj7",                         // chord-stab / pad only
+               "tunable": "low"|"mid"|"high"                                            // conga / djembe only
         },
         "2": <same shape>, ..., "8": <same shape>
       }
@@ -556,12 +569,33 @@ SCHEMA (version 2)
 }
 
 SOUND PALETTE (use exactly these keys for "sound")
-  Drums:       kick, snare, rim, clap, tom
-  Cymbals:     chh (closed hat), ohh (open hat), ride, shaker, tambourine
-  Percussion:  cowbell, conga (tunable low/mid/high), woodblock
-  Bass:        808, sub-bass, synth-bass            ← pitched, default note C2 (MIDI 36)
-  Tonal:       chord-stab, pluck                    ← pitched, default note C3 (MIDI 48)
-               vinyl-crackle, noise-sweep           ← FX, not pitched
+  Drums:       kick, snare, rim, clap, snap, tom
+  Cymbals:     chh (closed hat), ohh (open hat), ride, crash, shaker, tambourine
+  Percussion:  cowbell, conga, djembe (both tunable low/mid/high), woodblock
+  Bass:        808, sub-bass, synth-bass, acid-bass, reese-bass    ← pitched, default note C2 (MIDI 36)
+  Tonal:       chord-stab, pad, pluck                              ← pitched, default note C3 (MIDI 48)
+               riser, vinyl-bed, vinyl-crackle, noise-sweep        ← FX/texture, not pitched
+
+SPECIAL VOICE BEHAVIORS
+  • vinyl-bed is CONTINUOUS — its active steps just gate the bed on/off for the whole bar.
+    Placing one active step is enough to make the bed play through the bar; you don't need to
+    fill 16 steps. Use it for lo-fi or ambient atmosphere underneath everything.
+  • riser plays its full ~1-bar sweep when triggered and overlaps subsequent steps naturally.
+    Trigger it once near the end of a bar to transition into a section change. Don't try
+    to fit it inside the 16-step grid.
+
+KITS (optional curated 8-slot palettes — the user can also load these by name in the UI)
+  boom-bap     classic 90s hip-hop palette
+  trap         tight kick, snap-tight clap, hat rolls, sliding 808
+  house        4/4, off-beat hats, minor chord stab, sub
+  drill        UK drill — slid 808, sharp snare, crash hits, glide on
+  lo-fi        soft kick, dusty snare, vinyl bed, mellow pad
+  acid-house   squelchy 303 bass driving cowbell + chord stab
+  jungle-dnb   chopped breaks, ride wash, reese growl + sub
+  afrobeats    djembe-led, snappy hats, warm chord
+  ambient      sparse percussion, vinyl bed, evolving pad
+  Setting "kit" at the top level is a display-only hint — the per-slot "sound" values are
+  authoritative. Pick one only if your slot assignments actually match a kit.
 
 STEP DSL (each "steps" string is exactly 16 chars):
   .  off    x  on, medium    X  on, loud (accent)    o  on, soft (ghost)
@@ -570,7 +604,7 @@ PROBABILITY (optional, per active step): 4=100%, 3=75%, 2=50%, 1=25%, .=default 
 
 NOTES ENCODING (pitched slots)
   "notes" is an array of 16 integers, each a SEMITONE OFFSET from the sound's default pitch.
-  - 0  = play the default note (C2 for bass voices, C3 for chord/pluck)
+  - 0  = play the default note (C2 for bass voices, C3 for chord/pluck/pad)
   - 7  = a perfect fifth up;  -5 = a fourth down
   - Off steps: 0 is fine (ignored).
   - Omit "notes" entirely if every active step is at the default pitch.
@@ -580,15 +614,37 @@ GLIDE
     slide pitch between them (TB-303 style). Used heavily for trap 808 lines and acid bass.
 
 GENRE GUIDANCE
-- Boom-bap: kick on 1 and "and of 2", snare on 2 and 4, swing ~0.56, BPM 80-95. Ride swung 8ths
-  feels great. Shaker on continuous 16ths adds movement.
+- Boom-bap: kick on 1 and "and of 2", snare on 2 and 4, swing ~0.56, BPM 80-95. Ride swung
+  8ths feels great. Shaker on continuous 16ths adds movement. Rim on odd off-beats.
 - Trap: kick sparse and syncopated, snare/clap on 3, hi-hat rolls with probability + soft "o"
   ghost notes, swing 0, BPM 130-160. 808s on 1 and around the snare with glide between
   syncopated pitches (e.g. notes like [0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 7, 0, ...]).
+  A snap on backbeat layered with clap is the modern sound.
+- Drill: kick patterns with slid 808s (heavy glide), sharper snares, occasional crash on
+  bar one. BPM 140-150.
 - House: kick four-on-the-floor (1,5,9,13), clap on 5 and 13, closed hat on offbeats
   (3,7,11,15), open hat on 7 and 15. Chord stab on offbeats with a minor-7 voicing.
   Sub-bass on 1 and 9. Shaker continuous, tambourine on backbeats. BPM 120-128.
-- Garage: shuffled kicks, snare/clap on 5 and 13, sub-bass with glide, swing ~0.3, BPM 130.
+- Acid house: same kick/clap as house but the star is acid-bass with high resonance and
+  filter env — write a sequence with glide between adjacent notes and let the filter sweep.
+  BPM 120-130.
+- Jungle / DnB: chopped break feel, snappy snare on 5/13, reese-bass holding long notes
+  underneath (long decay so notes blur), sub-bass on root. BPM 160-180. Reese works well
+  with notes a fifth apart.
+- Lo-fi: BPM 70-90, swing ~0.2, soft kick, dusty snare, vinyl-bed always on, mellow chord
+  pad (maj7), sparse ride.
+- Afrobeats: BPM 100-115, djembe and conga as the rhythmic backbone, snap on accents,
+  warm major chord stab.
+- Ambient / Downtempo: BPM 60-80, sparse hits, long pad with reverb, vinyl-bed underneath,
+  pluck for occasional melodic accent.
+
+VOICE-SPECIFIC TIPS
+- acid-bass: keep resonance high (>0.6) and envAmount around 0.7 for the signature squelch.
+- reese-bass: longer note placements work best — its slow filter LFO needs time to breathe.
+- pad: typically on a single step at the start of a bar; its 1.5s+ decay does the work.
+- riser: one trigger near step 13-15 of a bar to transition into the next section.
+- vinyl-bed: a single active step in the bar is all that's needed.
+- crash: bar one, or final bar of the chain. Don't sprinkle it.
 
 - Ghost notes (o) on snares and hats are what make patterns feel human.
 - Use multiple banks (A→B variation) when the user asks for movement.

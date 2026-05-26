@@ -497,6 +497,270 @@ function triggerNoiseSweep(ctx, time, velocity, dest) {
   n.start(time); n.stop(time + dur + 0.02);
 }
 
+// ---------------- Drums (additions) ----------------
+
+// Snap: tight bandpassed noise burst at ~4kHz + small sine click for body.
+// Dryer/higher than clap — not interchangeable.
+function triggerSnap(ctx, time, velocity, dest) {
+  const n = whiteNoise(ctx, 0.04);
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass'; bp.frequency.value = 4000; bp.Q.value = 8;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, time);
+  g.gain.linearRampToValueAtTime(0.9, time + 0.001);
+  g.gain.exponentialRampToValueAtTime(0.001, time + 0.03);
+  n.connect(bp).connect(g).connect(dest);
+  n.start(time); n.stop(time + 0.05);
+
+  // Body click
+  const o = ctx.createOscillator();
+  o.type = 'sine';
+  o.frequency.value = 1800;
+  const og = ctx.createGain();
+  og.gain.setValueAtTime(0.0001, time);
+  og.gain.linearRampToValueAtTime(0.32, time + 0.0008);
+  og.gain.exponentialRampToValueAtTime(0.001, time + 0.015);
+  o.connect(og).connect(dest);
+  o.start(time); o.stop(time + 0.02);
+}
+
+// ---------------- Cymbals (additions) ----------------
+
+// Crash: wide noise + inharmonic high partials, long non-linear decay (~2.2s).
+function triggerCrash(ctx, time, velocity, dest) {
+  const dur = 2.2;
+  const n = whiteNoise(ctx, dur);
+  const hp = ctx.createBiquadFilter();
+  hp.type = 'highpass'; hp.frequency.value = 4000;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, time);
+  g.gain.linearRampToValueAtTime(0.55, time + 0.005);
+  // Non-linear: quick drop then long shimmering tail
+  g.gain.exponentialRampToValueAtTime(0.2, time + 0.4);
+  g.gain.exponentialRampToValueAtTime(0.001, time + dur);
+  n.connect(hp).connect(g).connect(dest);
+  n.start(time); n.stop(time + dur);
+
+  const partials = [5300, 7100, 8800, 11200];
+  for (const f of partials) {
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.value = f;
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.0001, time);
+    og.gain.exponentialRampToValueAtTime(0.045, time + 0.005);
+    og.gain.exponentialRampToValueAtTime(0.001, time + dur * 0.7);
+    o.connect(og).connect(dest);
+    o.start(time); o.stop(time + dur * 0.8);
+  }
+}
+
+// ---------------- Percussion (additions) ----------------
+
+// Djembe: sine fundamental with quick downward sweep + noise slap layer.
+// Tunable per-slot (low/mid/high) — different character from conga (sharper, more wood).
+function triggerDjembe(ctx, time, velocity, dest, opts = {}) {
+  const base = opts.tunable === 'low' ? 150 : opts.tunable === 'high' ? 290 : 210;
+  const osc = ctx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(base * 1.5, time);
+  osc.frequency.exponentialRampToValueAtTime(base, time + 0.018);
+  const og = ctx.createGain();
+  og.gain.setValueAtTime(0.0001, time);
+  og.gain.linearRampToValueAtTime(0.8, time + 0.0025);
+  og.gain.exponentialRampToValueAtTime(0.001, time + 0.16);
+  osc.connect(og).connect(dest);
+  osc.start(time); osc.stop(time + 0.18);
+
+  // Skin/slap noise layer — sharper bandpass higher than conga's body
+  const n = whiteNoise(ctx, 0.07);
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass'; bp.frequency.value = 1600; bp.Q.value = 2.2;
+  const ng = ctx.createGain();
+  ng.gain.setValueAtTime(0.32, time);
+  ng.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
+  n.connect(bp).connect(ng).connect(dest);
+  n.start(time); n.stop(time + 0.07);
+}
+
+// ---------------- Bass (additions) ----------------
+
+// Acid bass: 303-style squelch. Saw → resonant lowpass with strong filter env.
+// envAmount controls how much the filter sweeps from peak down to base.
+function triggerAcidBass(ctx, time, velocity, dest, opts = {}) {
+  const note = opts.note ?? 36;
+  const from = opts.fromPitch;
+  const f = opts.filter ?? { cutoff: 0.4, resonance: 0.65, envAmount: 0.75 };
+  const cutoff01 = f.cutoff;
+  const reso01 = f.resonance;
+  const envAmt = f.envAmount ?? 0.75;
+
+  const osc = ctx.createOscillator();
+  osc.type = 'sawtooth';
+  setPitch(osc, time, note, from);
+
+  const baseHz = 180 * Math.pow(30, cutoff01);
+  // Filter env can sweep up to ~10× base × envAmount factor
+  const peakHz = Math.min(12000, baseHz * (1 + 15 * envAmt) * (velocity === 2 ? 1.4 : velocity === 0 ? 0.8 : 1));
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  // Resonance can go squealy — don't conservatively cap it
+  lp.Q.value = 1 + reso01 * 28;
+  lp.frequency.setValueAtTime(peakHz, time);
+  lp.frequency.exponentialRampToValueAtTime(Math.max(80, baseHz), time + 0.22);
+
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, time);
+  g.gain.linearRampToValueAtTime(0.55, time + 0.005);
+  g.gain.exponentialRampToValueAtTime(0.0001, time + 0.4);
+
+  osc.connect(lp).connect(g).connect(dest);
+  osc.start(time); osc.stop(time + 0.45);
+}
+
+// Reese bass: two saws detuned ~15 cents, slow LFO on filter cutoff, longish decay.
+function triggerReeseBass(ctx, time, velocity, dest, opts = {}) {
+  const note = opts.note ?? 36;
+  const from = opts.fromPitch;
+  const f = opts.filter ?? { cutoff: 0.45, resonance: 0.15 };
+  const dur = 0.7;
+
+  const merge = ctx.createGain();
+  merge.gain.value = 0.5;
+  for (const dt of [-15, +15]) {
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.detune.value = dt;
+    setPitch(osc, time, note, from);
+    osc.connect(merge);
+    osc.start(time); osc.stop(time + dur);
+  }
+
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.Q.value = 1 + f.resonance * 4;
+  const baseHz = 200 * Math.pow(18, f.cutoff);
+  // Slow LFO modulation across the note length via setValueCurveAtTime
+  const samples = 32;
+  const curve = new Float32Array(samples);
+  for (let i = 0; i < samples; i++) {
+    const phase = (i / samples) * Math.PI * 2 * 1.5; // ~1.5 cycles per note
+    curve[i] = Math.max(80, baseHz * (1 + 0.35 * Math.sin(phase)));
+  }
+  lp.frequency.setValueCurveAtTime(curve, time, dur * 0.95);
+
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, time);
+  g.gain.linearRampToValueAtTime(0.55, time + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+
+  merge.connect(lp).connect(g).connect(dest);
+}
+
+// ---------------- Tonal (additions) ----------------
+
+// Pad: slow-evolving sustained chord. Multiple detuned saws per chord interval
+// with slow attack, long decay, gentle lowpass sweep.
+function triggerPad(ctx, time, velocity, dest, opts = {}) {
+  const root = opts.note ?? 48;
+  const from = opts.fromPitch;
+  const intervals = CHORD_INTERVALS[opts.chord] ?? CHORD_INTERVALS.minor;
+  const f = opts.filter ?? { cutoff: 0.5, resonance: 0.1 };
+  const dur = 1.9;
+
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  const baseHz = 400 + 5500 * f.cutoff;
+  lp.frequency.setValueAtTime(baseHz * 0.55, time);
+  lp.frequency.linearRampToValueAtTime(baseHz, time + dur * 0.6);
+  lp.Q.value = 0.7 + f.resonance * 5;
+
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, time);
+  // Slow attack (~200ms) then long decay
+  g.gain.linearRampToValueAtTime(0.3, time + 0.2);
+  g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+
+  lp.connect(g).connect(dest);
+
+  const detunes = [-10, 0, +10];
+  for (const interval of intervals) {
+    for (const dt of detunes) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.detune.value = dt;
+      const noteMidi = root + interval;
+      const fromMidi = from != null ? from + interval : null;
+      setPitch(osc, time, noteMidi, fromMidi);
+      const og = ctx.createGain();
+      og.gain.value = 0.18 / intervals.length;
+      osc.connect(og).connect(lp);
+      osc.start(time); osc.stop(time + dur + 0.1);
+    }
+  }
+}
+
+// Riser: ~1-bar upward-sweeping noise+pitch buildup for transitions.
+// Receives barSec from the engine so its duration scales with BPM.
+function triggerRiser(ctx, time, velocity, dest, opts = {}) {
+  const dur = Math.max(1.0, Math.min(4.0, opts.barSec ?? 2.0));
+
+  // Rising-highpass white noise that gets brighter as it climbs
+  const n = whiteNoise(ctx, dur);
+  const hp = ctx.createBiquadFilter();
+  hp.type = 'highpass'; hp.Q.value = 2;
+  hp.frequency.setValueAtTime(200, time);
+  hp.frequency.exponentialRampToValueAtTime(10000, time + dur);
+  const ng = ctx.createGain();
+  ng.gain.setValueAtTime(0.0001, time);
+  ng.gain.linearRampToValueAtTime(0.5, time + dur * 0.95);
+  ng.gain.exponentialRampToValueAtTime(0.001, time + dur);
+  n.connect(hp).connect(ng).connect(dest);
+  n.start(time); n.stop(time + dur);
+
+  // Ascending tone underneath
+  const osc = ctx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(140, time);
+  osc.frequency.exponentialRampToValueAtTime(2400, time + dur);
+  const og = ctx.createGain();
+  og.gain.setValueAtTime(0.0001, time);
+  og.gain.linearRampToValueAtTime(0.22, time + dur * 0.9);
+  og.gain.exponentialRampToValueAtTime(0.001, time + dur);
+  osc.connect(og).connect(dest);
+  osc.start(time); osc.stop(time + dur);
+}
+
+// Vinyl-bed: continuous low-level pink-ish noise + intermittent pops.
+// Engine triggers this once per bar (if any step is active) rather than per step.
+// Receives barSec so the texture fills the full bar.
+function triggerVinylBed(ctx, time, velocity, dest, opts = {}) {
+  const dur = Math.max(0.5, opts.barSec ?? 2.0);
+  const len = Math.floor(ctx.sampleRate * dur);
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  // 1-pole lowpass-filtered noise approximates pinkness cheaply
+  let last = 0;
+  for (let i = 0; i < len; i++) {
+    const white = Math.random() * 2 - 1;
+    last = last * 0.96 + white * 0.04;
+    const pop = Math.random() < 0.0008 ? (Math.random() * 2 - 1) * 1.5 : 0;
+    d[i] = last * 0.5 + pop;
+  }
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  const hp = ctx.createBiquadFilter();
+  hp.type = 'highpass'; hp.frequency.value = 200;
+  const g = ctx.createGain();
+  // Gentle envelope to avoid edge clicks; sustain at constant amplitude
+  g.gain.setValueAtTime(0.0001, time);
+  g.gain.linearRampToValueAtTime(0.7, time + 0.04);
+  g.gain.setValueAtTime(0.7, time + Math.max(0.05, dur - 0.04));
+  g.gain.linearRampToValueAtTime(0.001, time + dur);
+  src.connect(hp).connect(g).connect(dest);
+  src.start(time); src.stop(time + dur + 0.01);
+}
+
 // ---------------- Sample playback (overrides the assigned voice) ----------------
 
 export function triggerSample(ctx, time, dest, buffer) {
@@ -514,20 +778,28 @@ export const VOICES = {
   snare: triggerSnare,
   rim: triggerRim,
   clap: triggerClap,
+  snap: triggerSnap,
   tom: triggerTom,
   chh: triggerCHH,
   ohh: triggerOHH,
   ride: triggerRide,
+  crash: triggerCrash,
   shaker: triggerShaker,
   tambourine: triggerTambourine,
   cowbell: triggerCowbell,
   conga: triggerConga,
+  djembe: triggerDjembe,
   woodblock: triggerWoodblock,
   '808': trigger808,
   'sub-bass': triggerSubBass,
   'synth-bass': triggerSynthBass,
+  'acid-bass': triggerAcidBass,
+  'reese-bass': triggerReeseBass,
   'chord-stab': triggerChordStab,
+  pad: triggerPad,
   pluck: triggerPluck,
+  riser: triggerRiser,
+  'vinyl-bed': triggerVinylBed,
   'vinyl-crackle': triggerVinylCrackle,
   'noise-sweep': triggerNoiseSweep,
 };

@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import {
   PALETTE, CATEGORIES, CHORD_TYPES,
-  isPitched, hasFilter, hasChord, tunableValues, noteLabel,
+  isPitched, hasFilter, hasChord, tunableValues, isContinuous, hasFilterEnv, noteLabel,
 } from './sounds.js';
+import { KITS } from './kits.js';
 
 // Position a popover near an anchor element, clamped to the viewport.
 function placeBelow(anchor, popoverEl) {
@@ -37,32 +38,93 @@ function useOutsideClose(ref, onClose) {
 
 export function PalettePopover({ slotIdx, currentSound, anchor, onPick, onClose }) {
   const ref = useRef(null);
+  const [query, setQuery] = useState('');
   useEffect(() => { placeBelow(anchor, ref.current); }, [anchor]);
   useOutsideClose(ref, onClose);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return PALETTE;
+    const out = {};
+    for (const [key, m] of Object.entries(PALETTE)) {
+      if (key.includes(q) || m.name.toLowerCase().includes(q) || m.category.includes(q)) {
+        out[key] = m;
+      }
+    }
+    return out;
+  }, [query]);
+
+  // Detect whether each category has any visible items under the filter
+  const visibleByCategory = useMemo(() => {
+    const map = {};
+    for (const cat of CATEGORIES) {
+      map[cat.id] = Object.entries(filtered).filter(([, m]) => m.category === cat.id);
+    }
+    return map;
+  }, [filtered]);
+  const totalVisible = Object.values(visibleByCategory).reduce((n, l) => n + l.length, 0);
 
   return (
     <div className="popover palette-popover" ref={ref}>
       <div className="popover-header">SLOT {slotIdx + 1} · CHOOSE SOUND</div>
+      <input
+        className="popover-search"
+        placeholder="filter sounds…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        autoFocus
+        spellCheck={false}
+      />
       <div className="palette-grid">
-        {CATEGORIES.map(cat => (
-          <div key={cat.id} className="palette-group">
-            <div className="palette-group-label">{cat.label}</div>
-            <div className="palette-group-row">
-              {Object.entries(PALETTE).filter(([, m]) => m.category === cat.id).map(([key, m]) => (
-                <button
-                  key={key}
-                  className={`palette-item ${currentSound === key ? 'active' : ''} ${m.pitched ? 'pitched' : ''}`}
-                  onClick={() => onPick(key)}
-                  title={`${m.name}${m.pitched ? ' · pitched' : ''}`}
-                >
-                  <span className="palette-item-name">{m.name}</span>
-                  {m.pitched && <span className="palette-item-tag">P</span>}
-                </button>
-              ))}
+        {CATEGORIES.map(cat => {
+          const items = visibleByCategory[cat.id];
+          if (!items.length) return null;
+          return (
+            <div key={cat.id} className="palette-group">
+              <div className="palette-group-label">{cat.label}</div>
+              <div className="palette-group-row">
+                {items.map(([key, m]) => (
+                  <button
+                    key={key}
+                    className={`palette-item ${currentSound === key ? 'active' : ''} ${m.pitched ? 'pitched' : ''} ${m.continuous ? 'continuous' : ''}`}
+                    onClick={() => onPick(key)}
+                    title={`${m.name}${m.pitched ? ' · pitched' : ''}${m.continuous ? ' · continuous (bar-long bed)' : ''}`}
+                  >
+                    <span className="palette-item-name">{m.name}</span>
+                    {m.pitched && <span className="palette-item-tag">P</span>}
+                    {m.continuous && <span className="palette-item-tag bed">BED</span>}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          );
+        })}
+        {totalVisible === 0 && <div className="popover-empty">No sounds match "{query}".</div>}
+      </div>
+    </div>
+  );
+}
+
+export function KitsPopover({ anchor, currentKitId, onPick, onClose }) {
+  const ref = useRef(null);
+  useEffect(() => { placeBelow(anchor, ref.current); }, [anchor]);
+  useOutsideClose(ref, onClose);
+  return (
+    <div className="popover kits-popover" ref={ref}>
+      <div className="popover-header">LOAD KIT</div>
+      <div className="kits-list">
+        {KITS.map(kit => (
+          <button
+            key={kit.id}
+            className={`kit-item ${currentKitId === kit.id ? 'active' : ''}`}
+            onClick={() => onPick(kit)}
+          >
+            <div className="kit-item-name">{kit.name}</div>
+            <div className="kit-item-desc">{kit.description}</div>
+          </button>
         ))}
       </div>
+      <div className="popover-footnote">loading a kit swaps sounds; your pattern stays put</div>
     </div>
   );
 }
@@ -150,6 +212,13 @@ export function SlotSettingsPopover({ slot, anchor, onGlide, onChord, onFilter, 
               <Slider value={slot.filter?.resonance ?? 0.2} onChange={(v) => onFilter('resonance', v)} />
               <span className="setting-readout">{Math.round((slot.filter?.resonance ?? 0) * 100)}</span>
             </div>
+            {hasFilterEnv(slot.sound) && (
+              <div className="setting-row">
+                <span className="setting-label">ENV</span>
+                <Slider value={slot.filter?.envAmount ?? 0.75} onChange={(v) => onFilter('envAmount', v)} />
+                <span className="setting-readout">{Math.round((slot.filter?.envAmount ?? 0) * 100)}</span>
+              </div>
+            )}
           </>
         )}
         {tv && (

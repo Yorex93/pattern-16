@@ -5,10 +5,11 @@ import { ImportJsonModal, ExportJsonModal } from './json-modals.jsx';
 import { AI_SYSTEM_PROMPT } from './json-io.js';
 import {
   PALETTE, CATEGORIES, SOUND_KEYS, CHORD_TYPES,
-  isPitched, hasFilter, hasChord, tunableValues, defaultNote, defaultFilter, defaultChord,
+  isPitched, hasFilter, hasChord, tunableValues, isContinuous, defaultNote, defaultFilter, defaultChord,
   DEFAULT_LOADOUT, noteLabel, shortNoteLabel,
 } from './sounds.js';
-import { PalettePopover, NotePicker, SlotSettingsPopover } from './slot-ui.jsx';
+import { PalettePopover, NotePicker, SlotSettingsPopover, KitsPopover } from './slot-ui.jsx';
+import { KITS, getKit } from './kits.js';
 
 const BANK_LETTERS = ['A', 'B', 'C', 'D'];
 const DELAY_OPTIONS = ['1/8', '1/4', '3/8', '1/2'];
@@ -116,57 +117,111 @@ function makeSlot(sound, pattern, overrides = {}) {
   };
 }
 
-// ----- Presets -----
+// Presets pair a kit (which sets slot sound assignments + mix/config) with a
+// step pattern per slot. Pattern entries follow the row() DSL — pitched slots
+// don't need explicit notes here; the loader fills in the kit's defaultNote.
 const PRESETS = {
-  'BOOM-BAP': () => {
-    const slots = [
-      makeSlot('kick',   row([2,'.','.','.', '.','.',1,'.', 1,'.','.','.', '.','.','.','.'])),
-      makeSlot('snare',  row(['.','.','.','.', 2,'.','.','.', '.','.','.','.', 2,'.','.','.']), { reverbSend: 0.45 }),
-      makeSlot('chh',    row([1,'.',1,'.', 1,'.',1,'.', 1,'.',1,'.', 1,'.',1,'.']),  { reverbSend: 0.1 }),
-      makeSlot('ohh',    row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.',1,'.']), { reverbSend: 0.25 }),
-      makeSlot('rim',    row(['.','.',[1,75],'.', '.','.','.','.', '.','.',[1,75],'.', '.','.','.','.'])),
-      makeSlot('ride',   row([1,'.','.','.', 1,'.','.','.', 1,'.','.','.', 1,'.','.','.']), { reverbSend: 0.2 }),
-      makeSlot('shaker', row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.'])),
-      makeSlot('808',    row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.'], 36)),
-    ];
-    return { slots, swing: 56, reverbAmount: 0.32 };
+  'BOOM-BAP': {
+    kitId: 'boom-bap',
+    bpm: 88,
+    swing: 56,
+    reverbAmount: 0.32,
+    patterns: [
+      row([2,'.','.','.', '.','.',1,'.', 1,'.','.','.', '.','.','.','.']),       // kick
+      row(['.','.','.','.', 2,'.','.','.', '.','.','.','.', 2,'.','.','.']),     // snare
+      row([1,'.',1,'.', 1,'.',1,'.', 1,'.',1,'.', 1,'.',1,'.']),                  // chh
+      row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.',1,'.']),   // ohh
+      row(['.','.',[1,75],'.', '.','.','.','.', '.','.',[1,75],'.', '.','.','.','.']),     // rim
+      row([1,'.','.','.', 1,'.','.','.', 1,'.','.','.', 1,'.','.','.']),         // ride
+      row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']), // shaker
+      row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']), // 808 (empty so user discovers it)
+    ],
   },
 
-  'TRAP': () => {
-    const N = 36;
-    const slots = [
-      makeSlot('kick',   row([2,'.','.','.', '.','.',1,'.', '.','.',1,'.', '.','.','.','.'])),
-      makeSlot('snare',  row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']), { reverbSend: 0.15 }),
-      makeSlot('chh',    row([1,[1,75],1,[1,50], 1,[1,75],1,[1,75], 1,[1,50],1,[1,75], 1,[1,75],[1,50],[1,75]])),
-      makeSlot('ohh',    row(['.','.','.','.', '.','.','.','.', '.','.',1,'.', '.','.','.','.']), { delaySend: 0.55, reverbSend: 0.2 }),
-      makeSlot('clap',   row(['.','.','.','.', 2,'.','.','.', '.','.','.','.', 2,'.','.','.']), { reverbSend: 0.2 }),
-      makeSlot('tom',    row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.',1,'.']), { reverbSend: 0.25, delaySend: 0.2 }),
-      makeSlot('shaker', row(['.',1,'.',1, '.',1,'.',1, '.',1,'.',1, '.',1,'.',1])),
-      makeSlot('808',    row([2,'.','.','.', '.','.',[1,100,3],'.', '.','.',[1,100,5],'.', '.','.','.','.'], N), { glide: true }),
-    ];
-    return { slots, swing: 0, reverbAmount: 0.22 };
+  'TRAP': {
+    kitId: 'trap',
+    bpm: 140,
+    swing: 0,
+    reverbAmount: 0.22,
+    patterns: [
+      row([2,'.','.','.', '.','.',1,'.', '.','.',1,'.', '.','.','.','.']),                                // kick
+      row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']),                              // snare
+      row([1,[1,75],1,[1,50], 1,[1,75],1,[1,75], 1,[1,50],1,[1,75], 1,[1,75],[1,50],[1,75]]),             // chh rolls
+      row(['.','.','.','.', '.','.','.','.', '.','.',1,'.', '.','.','.','.']),                            // ohh
+      row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']),                              // clap
+      row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.',1,'.']),                            // snap (decorative)
+      // 808 with syncopated pitched line: root (0), +5, +7 → C2, F2, G2
+      row([[2,100,0],'.','.','.', '.','.',[1,100,3],'.', '.','.',[1,100,5],'.', '.','.','.','.'], 36),
+      row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']),                          // riser (empty by default)
+    ],
   },
 
-  'HOUSE': () => {
-    const slots = [
-      makeSlot('kick',       row([2,'.','.','.', 1,'.','.','.', 1,'.','.','.', 1,'.','.','.'])),
-      makeSlot('clap',       row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 2,'.','.','.']), { reverbSend: 0.4 }),
-      makeSlot('chh',        row(['.','.',1,'.', '.','.',1,'.', '.','.',1,'.', '.','.',1,'.']), { reverbSend: 0.1 }),
-      makeSlot('ohh',        row(['.','.','.','.', '.','.',1,'.', '.','.','.','.', '.','.',1,'.']), { reverbSend: 0.2 }),
-      makeSlot('shaker',     row([1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1])),
-      makeSlot('tambourine', row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']), { reverbSend: 0.3 }),
-      makeSlot('chord-stab', row(['.','.','.','.', '.','.',1,'.', '.','.','.','.', '.','.',1,'.'], 48), { chordType: 'minor', reverbSend: 0.3 }),
-      makeSlot('sub-bass',   row([1,'.','.','.', '.','.','.','.', 1,'.','.','.', '.','.','.','.'], 36)),
-    ];
-    return { slots, swing: 0, reverbAmount: 0.20 };
+  'HOUSE': {
+    kitId: 'house',
+    bpm: 124,
+    swing: 0,
+    reverbAmount: 0.20,
+    patterns: [
+      row([2,'.','.','.', 1,'.','.','.', 1,'.','.','.', 1,'.','.','.']),                                  // kick 4/4
+      row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 2,'.','.','.']),                              // clap
+      row(['.','.',1,'.', '.','.',1,'.', '.','.',1,'.', '.','.',1,'.']),                                  // chh off-beats
+      row(['.','.','.','.', '.','.',1,'.', '.','.','.','.', '.','.',1,'.']),                              // ohh
+      row([1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1]),                                                          // shaker
+      row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']),                              // tambourine
+      row(['.','.','.','.', '.','.',1,'.', '.','.','.','.', '.','.',1,'.'], 48),                          // chord-stab off-beats
+      row([1,'.','.','.', '.','.','.','.', 1,'.','.','.', '.','.','.','.'], 36),                          // sub-bass on 1 and 9
+    ],
   },
 };
 
+// ----- Kit + preset application helpers -----
+
+// Apply a kit to a fresh blank slot array (preservePattern=false) or to existing
+// slots (preservePattern=true, used by the user-facing "load kit" action which
+// must keep the user's pattern intact).
+function slotsFromKit(kit, basePatternSlots, preservePattern) {
+  return Array.from({ length: SLOT_COUNT }, (_, i) => {
+    const newSound = kit.slots[i] ?? null;
+    const slot = emptySlot(newSound);
+    if (preservePattern && basePatternSlots) {
+      const prev = basePatternSlots[i];
+      slot.pattern = prev.pattern.map(c => ({ ...c }));
+      if (isPitched(newSound)) {
+        for (let j = 0; j < 16; j++) {
+          if (slot.pattern[j].on && slot.pattern[j].note == null) slot.pattern[j].note = slot.defaultNote;
+        }
+      } else {
+        for (let j = 0; j < 16; j++) { const c = slot.pattern[j]; if (c.note != null) delete c.note; }
+      }
+    }
+    if (kit.mix?.[i]) Object.assign(slot, kit.mix[i]);
+    if (kit.config?.[i]) {
+      const cfg = kit.config[i];
+      if (cfg.glide != null) slot.glide = cfg.glide;
+      if (cfg.chordType != null) slot.chordType = cfg.chordType;
+      if (cfg.tunable != null) slot.tunable = cfg.tunable;
+      if (cfg.filter) slot.filter = { ...slot.filter, ...cfg.filter };
+    }
+    return slot;
+  });
+}
+
+// Build a complete bank from a preset (kit + patterns).
 function bankFromPreset(name) {
-  const fn = PRESETS[name];
-  if (!fn) return emptyBank();
-  const { slots, swing, reverbAmount } = fn();
-  return { slots, swing, reverbAmount };
+  const preset = PRESETS[name];
+  if (!preset) return emptyBank();
+  const kit = getKit(preset.kitId) ?? { slots: DEFAULT_LOADOUT.slice() };
+  const slots = slotsFromKit(kit, null, false).map((s, i) => {
+    const pat = preset.patterns[i] || EMPTY_ROW();
+    const next = { ...s, pattern: pat.map(c => ({ ...c })) };
+    if (isPitched(s.sound)) {
+      for (let j = 0; j < 16; j++) {
+        if (next.pattern[j].on && next.pattern[j].note == null) next.pattern[j].note = s.defaultNote;
+      }
+    }
+    return next;
+  });
+  return { slots, swing: preset.swing, reverbAmount: preset.reverbAmount };
 }
 
 // ============================================================
@@ -272,11 +327,12 @@ function SlotLabel({ slotIdx, slot, sample, onLoad, onClear, onOpenPalette, drag
     await onLoad(file);
   };
   const meta = slot.sound ? PALETTE[slot.sound] : null;
+  const continuous = !!meta?.continuous;
   const label = sample ? sample.name.replace(/\.[^.]+$/, '').slice(0, 10) : (meta?.short ?? '—');
 
   return (
     <div
-      className={`row-name ${dragOver ? 'drag' : ''} ${sample ? 'has-sample' : ''}`}
+      className={`row-name ${dragOver ? 'drag' : ''} ${sample ? 'has-sample' : ''} ${continuous ? 'continuous' : ''}`}
       onDragOver={(e) => { e.preventDefault(); setDragOver(slotIdx); }}
       onDragLeave={() => setDragOver(null)}
       onDrop={(e) => {
@@ -309,7 +365,10 @@ function SlotLabel({ slotIdx, slot, sample, onLoad, onClear, onOpenPalette, drag
             <span className="sample-name" title={sample.name}>{label}</span>
           </>
         ) : (
-          <span className="instr-name">{label}</span>
+          <>
+            <span className="instr-name">{label}</span>
+            {continuous && <span className="slot-bed-tag">BED</span>}
+          </>
         )}
       </span>
       {sample && (
@@ -364,6 +423,10 @@ function App() {
   const [editBank, setEditBank] = useState(0);
   const [chain, setChain] = useState([0]);
   const [activePreset, setActivePreset] = useState('BOOM-BAP');
+  // Kit tracking: id of the kit last loaded into the edit bank, and whether the
+  // user has changed slot sounds since (display only).
+  const [currentKit, setCurrentKit] = useState('boom-bap');
+  const [kitModified, setKitModified] = useState(false);
 
   const [delayFeedback, setDelayFeedback] = useState(0.35);
   const [delayTime, setDelayTime] = useState('3/8');
@@ -387,6 +450,7 @@ function App() {
   const [palettePopover, setPalettePopover] = useState(null);
   const [notePicker, setNotePicker] = useState(null);
   const [slotSettings, setSlotSettings] = useState(null);
+  const [kitsPopover, setKitsPopover] = useState(null);
 
   const engineRef = useRef(null);
   const rafRef = useRef(null);
@@ -551,6 +615,8 @@ function App() {
     updateSlot(slotIdx, s => reassignSlotSound(s, soundKey));
     setPalettePopover(null);
     setActivePreset(null);
+    // Manual slot change marks the loaded kit as "modified" for display.
+    if (currentKit) setKitModified(true);
   };
 
   const setSlotGlide = (slotIdx, on) => updateSlot(slotIdx, s => ({ ...s, glide: !!on }));
@@ -563,18 +629,36 @@ function App() {
 
   // ----- Presets -----
   const applyPreset = (name) => {
+    const preset = PRESETS[name];
+    if (!preset) return;
     const nb = bankFromPreset(name);
     setBanks(prev => prev.map((b, i) => (i === editBank ? nb : b)));
-    setBpmState(name === 'BOOM-BAP' ? 88 : name === 'TRAP' ? 140 : 124);
+    setBpmState(preset.bpm);
     setActivePreset(name);
+    setCurrentKit(preset.kitId);
+    setKitModified(false);
   };
   const clearEditBank = () => {
-    // Preserve current sound assignments + mix; clear patterns only
+    // Clears patterns only — kit, slot assignments, mix and config are preserved
+    // so the user can keep noodling in the current palette.
     updateEditBank(b => ({
       ...b,
       slots: b.slots.map(s => ({ ...s, pattern: EMPTY_ROW() })),
     }));
     setActivePreset(null);
+  };
+
+  // ----- Kits -----
+  const loadKit = (kit) => {
+    updateEditBank(b => ({
+      ...b,
+      slots: slotsFromKit(kit, b.slots, true),
+    }));
+    setCurrentKit(kit.id);
+    setKitModified(false);
+    setActivePreset(null);
+    setKitsPopover(null);
+    setToast({ kind: 'ok', text: `Loaded kit: ${kit.name}` });
   };
 
   // ----- Samples (now keyed by slot index) -----
@@ -641,6 +725,9 @@ function App() {
     const firstPresent = value.bankPresent.findIndex(Boolean);
     setEditBank(firstPresent >= 0 ? firstPresent : 0);
     setActivePreset(null);
+    // Kit hint from the file (display only — slot assignments are authoritative)
+    setCurrentKit(value.kit ?? null);
+    setKitModified(false);
     setImportOpen(false);
     const w = warnings?.length ? ` (${warnings.length} warning${warnings.length > 1 ? 's' : ''})` : '';
     setToast({ kind: 'ok', text: `Loaded: ${value.name}${w}` });
@@ -735,6 +822,18 @@ function App() {
               playingChainIdx={playState.chainIdx}
               isPlaying={playing}
             />
+            <div className="kits-panel">
+              <div className="band-label">KITS <span className="band-sub">{currentKit ? `→ ${getKit(currentKit)?.name ?? currentKit}${kitModified ? ' (MOD)' : ''}` : ''}</span></div>
+              <button
+                className={`kit-button ${currentKit && !kitModified ? 'on' : ''}`}
+                onClick={(e) => setKitsPopover({ anchor: e.currentTarget })}
+                title="Load a kit (8 curated sounds; preserves your pattern)"
+              >
+                <span className="preset-led" />
+                {currentKit ? (getKit(currentKit)?.name ?? 'CUSTOM') : 'CHOOSE KIT…'}
+                <span className="kit-chevron">▾</span>
+              </button>
+            </div>
             <div className="presets-panel">
               <div className="band-label">PATTERNS <span className="band-sub">→ BANK {BANK_LETTERS[editBank]}</span></div>
               <div className="presets-row">
@@ -882,6 +981,12 @@ function App() {
           SWING {Math.round(bank.swing)}%
           <span className="sep">·</span>
           DELAY {delayTime}
+          {currentKit && (
+            <>
+              <span className="sep">·</span>
+              KIT {(getKit(currentKit)?.name ?? currentKit).toUpperCase()}{kitModified && <span className="sub-tag"> (MODIFIED)</span>}
+            </>
+          )}
         </div>
       </div>
 
@@ -915,6 +1020,14 @@ function App() {
           onClose={() => setSlotSettings(null)}
         />
       )}
+      {kitsPopover && (
+        <KitsPopover
+          anchor={kitsPopover.anchor}
+          currentKitId={kitModified ? null : currentKit}
+          onPick={loadKit}
+          onClose={() => setKitsPopover(null)}
+        />
+      )}
       {importOpen && (
         <ImportJsonModal
           onClose={() => setImportOpen(false)}
@@ -923,7 +1036,7 @@ function App() {
       )}
       {exportJsonOpen && (
         <ExportJsonModal
-          state={{ name: patternName, bpm, banks, chain, delayTime, delayFeedback, editBank }}
+          state={{ name: patternName, bpm, banks, chain, delayTime, delayFeedback, editBank, kit: currentKit }}
           onClose={() => setExportJsonOpen(false)}
           onToast={(text) => setToast({ kind: 'ok', text })}
         />

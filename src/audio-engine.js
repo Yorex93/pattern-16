@@ -2,6 +2,7 @@
 // scheduling, sample override per slot, reverb + delay sends, offline render.
 
 import { VOICES, triggerSample } from './voices.js';
+import { isContinuous } from './sounds.js';
 
 export const SLOT_COUNT = 8;
 const SLOT_INDICES = Array.from({ length: SLOT_COUNT }, (_, i) => i);
@@ -63,7 +64,7 @@ function computeGlideSource(slot) {
   return out;
 }
 
-function triggerSlot(routing, slotIdx, time, cell, slot, samples) {
+function triggerSlot(routing, slotIdx, time, cell, slot, samples, barSec) {
   if (slot.mute) return;
   const velocity = cell.velocity ?? 1;
   const velGain = VEL_GAIN[velocity] ?? 0.85;
@@ -82,7 +83,25 @@ function triggerSlot(routing, slotIdx, time, cell, slot, samples) {
     filter: slot.filter,
     chord: slot.chordType,
     tunable: slot.tunable,
+    barSec,
   });
+}
+
+// Continuous voices (e.g. vinyl-bed) play one bar-long texture per bar instead
+// of per-step hits. Active steps just gate the bed on/off for that bar.
+function maybeTriggerBed(routing, slotIdx, time, slot, samples, barSec) {
+  if (slot.mute) return;
+  if (!slot.pattern.some(c => c.on)) return;
+  const dest = makeDest(routing, slotIdx, slot.volume, 1, slot.reverbSend, slot.delaySend);
+  const buf = samples[slotIdx];
+  if (buf) {
+    // Sample upload on a continuous slot still plays per-bar like the bed.
+    triggerSample(routing.ctx, time, dest, buf);
+    return;
+  }
+  const fn = VOICES[slot.sound];
+  if (!fn) return;
+  fn(routing.ctx, time, 1, dest, { barSec });
 }
 
 // ----- Routing builder (shared by live + offline) -----
@@ -233,7 +252,13 @@ class DrumEngine {
     if (step === 0 && this.routing) {
       this.routing.reverbWet.gain.setTargetAtTime(bank.reverbAmount, baseTime, 0.01);
     }
+    const barSec = (60 / this.bpm) * 4;
     for (const { slotIdx, slot, glideSource } of iterSlots(bank)) {
+      // Continuous voices: trigger once per bar, gated by "any step active".
+      if (isContinuous(slot.sound)) {
+        if (step === 0) maybeTriggerBed(this.routing, slotIdx, baseTime, slot, this.samples, barSec);
+        continue;
+      }
       const cell = slot.pattern[step];
       if (!cell?.on) continue;
       const p = cell.probability ?? 100;
@@ -241,7 +266,7 @@ class DrumEngine {
       const augmented = glideSource && glideSource[step] != null
         ? { ...cell, __fromPitch: glideSource[step] }
         : cell;
-      triggerSlot(this.routing, slotIdx, triggerTime, augmented, slot, this.samples);
+      triggerSlot(this.routing, slotIdx, triggerTime, augmented, slot, this.samples, barSec);
     }
     this.queue.push({ step, chainIdx, time: baseTime });
     if (this.queue.length > 64) this.queue.shift();
@@ -311,6 +336,7 @@ async function renderOffline({ banks, chain, bpm, delayFeedback, delayTime, samp
     delayTimeSec,
   });
 
+  const barSec = (60 / bpm) * 4;
   let hitCount = 0;
   for (let bar = 0; bar < bars; bar++) {
     const bank = banks[chain[bar]];
@@ -324,6 +350,13 @@ async function renderOffline({ banks, chain, bpm, delayFeedback, delayTime, samp
       if (glideSource) glideMap[slotIdx] = glideSource;
     }
 
+    // Continuous-voice triggers (vinyl-bed): one per bar, at bar start.
+    for (let slotIdx = 0; slotIdx < SLOT_COUNT; slotIdx++) {
+      const slot = bank.slots[slotIdx];
+      if (!slot?.sound || !isContinuous(slot.sound)) continue;
+      maybeTriggerBed(routing, slotIdx, barStart, slot, localSamples, barSec);
+    }
+
     for (let step = 0; step < 16; step++) {
       const baseTime = barStart + step * sixteenth;
       const isOff = (step % 2) === 1;
@@ -333,6 +366,7 @@ async function renderOffline({ banks, chain, bpm, delayFeedback, delayTime, samp
       for (let slotIdx = 0; slotIdx < SLOT_COUNT; slotIdx++) {
         const slot = bank.slots[slotIdx];
         if (!slot?.sound) continue;
+        if (isContinuous(slot.sound)) continue; // handled at bar start
         const cell = slot.pattern[step];
         if (!cell?.on) continue;
         const p = cell.probability ?? 100;
@@ -340,7 +374,7 @@ async function renderOffline({ banks, chain, bpm, delayFeedback, delayTime, samp
         const augmented = glideMap[slotIdx] && glideMap[slotIdx][step] != null
           ? { ...cell, __fromPitch: glideMap[slotIdx][step] }
           : cell;
-        triggerSlot(routing, slotIdx, t, augmented, slot, localSamples);
+        triggerSlot(routing, slotIdx, t, augmented, slot, localSamples, barSec);
         hitCount++;
       }
     }
