@@ -868,14 +868,19 @@ function parseSlot(v, base, errors, warnings) {
       });
   }
 
-  // chord
+  // chord (legacy slot-level chordType — superseded by bank.chord.type in v5
+  // but still parsed for backward compatibility with v4 files). Accept the
+  // full v5 set (8 types); demote unknowns to warnings since the field is
+  // ignored at runtime when a bank chord is present.
   if (v.sound !== null && hasChord(v.sound) && v.chordType) {
-    if (CHORD_TYPES.includes(v.chordType)) slot.chordType = v.chordType;
-    else
-      errors.push({
+    if (CHORD_TYPES_V5.includes(v.chordType)) {
+      slot.chordType = v.chordType;
+    } else {
+      warnings.push({
         path: path("chordType"),
-        message: `chordType must be one of ${CHORD_TYPES.join(", ")}.`,
+        message: `chordType "${v.chordType}" is not recognized; ignored. Valid values: ${CHORD_TYPES_V5.join(", ")}.`,
       });
+    }
   }
 
   // tunable (e.g. conga low/mid/high)
