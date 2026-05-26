@@ -140,10 +140,11 @@ const PRESETS = {
     swing: 56,
     reverbAmount: 0.32,
     chain: [0, 0, 1, 0],
-    // No follow-chord and no 808 pattern by default — boom-bap leaves the 808
-    // slot empty so users discover it. The chord change between banks A and B
-    // is implicit (chord-stab would carry it, but the boom-bap kit doesn't
-    // include one — that's intentional, a clean sparse hip-hop palette).
+    // 808 pattern is intentionally empty (the A2 default was too boomy) but
+    // the slot is still wired for follow-chord — if a user adds hits, they'll
+    // transpose down a fifth on bank B (Dm7) automatically.
+    followChord: [false, false, false, false, false, false, false, true],
+    melodyKey: { 7: 'A minor' },
     banks: [
       {
         chord: { root: 'A', type: 'm7' },
@@ -180,9 +181,10 @@ const PRESETS = {
     swing: 0,
     reverbAmount: 0.22,
     chain: [0, 0, 1, 1],
-    // 808 left empty by default — the kit places one on slot 7 ready for the
-    // user to place hits. Bank chord labels still mark the progression for
-    // anyone who wants to add a chord-stab or enable the 808 follow-chord.
+    // 808 pattern intentionally empty; follow-chord stays wired so hits the
+    // user adds on slot 7 will transpose from F to C on bank B (Cm).
+    followChord: [false, false, false, false, false, false, true, false],
+    melodyKey: { 6: 'F minor' },
     banks: [
       {
         chord: { root: 'F', type: 'minor' },
@@ -1337,6 +1339,19 @@ function App() {
           <span className={`dot ${playing ? 'live' : ''}`} /> {playing ? 'RUNNING' : 'STANDBY'}
           <span className="sep">·</span>
           BANK {BANK_LETTERS[playing ? playingBankIdx : editBank]}{!playing && <span className="sub-tag"> (EDIT)</span>}
+          {(() => {
+            // Show the currently-playing bank's chord when it has one. v4-imported
+            // banks without a chord field skip this segment entirely.
+            const currentBank = banks[playing ? playingBankIdx : editBank];
+            const ch = currentBank?.chord;
+            if (!ch || !ch.root || !ch.type) return null;
+            return (
+              <>
+                <span className="sep">·</span>
+                CHORD {chordLabel(ch)}
+              </>
+            );
+          })()}
           <span className="sep">·</span>
           CHAIN {Math.min(playState.chainIdx % chain.length, chain.length - 1) + 1}/{chain.length}
           <span className="sep">·</span>
