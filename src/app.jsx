@@ -211,6 +211,43 @@ function slotsFromKit(kit, basePatternSlots, preservePattern) {
 }
 
 // Build a complete bank from a preset (kit + patterns).
+// Sounds that should be ducked when the kick fires. Bass voices + pitched
+// tonal voices (chord-stab, pad, pluck). FX (riser, vinyl-bed, vinyl-crackle,
+// noise-sweep) are NOT included even though they live in the Tonal category.
+const SIDECHAIN_TARGET_SOUNDS = new Set([
+  '808', 'sub-bass', 'synth-bass', 'acid-bass', 'reese-bass',
+  'chord-stab', 'pad', 'pluck',
+]);
+function isSidechainTarget(sound) {
+  return !!sound && SIDECHAIN_TARGET_SOUNDS.has(sound);
+}
+// Derive the full target list from a slots array (used on JSON import + init).
+function deriveSidechainTargets(slots) {
+  const out = [];
+  for (let i = 0; i < slots.length; i++) {
+    if (isSidechainTarget(slots[i]?.sound)) out.push(i);
+  }
+  return out;
+}
+// Delta update: when a single slot's sound changes, add or remove just that
+// slot from the targets list. Preserves user manual unchecks on OTHER slots.
+function updateTargetsForSlotChange(targets, slotIdx, oldSound, newSound) {
+  const was = isSidechainTarget(oldSound);
+  const isT = isSidechainTarget(newSound);
+  if (was === isT) return targets;
+  const set = new Set(targets);
+  if (isT) set.add(slotIdx); else set.delete(slotIdx);
+  return Array.from(set).sort((a, b) => a - b);
+}
+// Apply the delta across all 8 slots (used by kit/preset load).
+function recomputeTargetsForSlots(prevTargets, prevSlots, newSlots) {
+  let t = prevTargets;
+  for (let i = 0; i < SLOT_COUNT; i++) {
+    t = updateTargetsForSlotChange(t, i, prevSlots[i]?.sound, newSlots[i]?.sound);
+  }
+  return t;
+}
+
 function bankFromPreset(name) {
   const preset = PRESETS[name];
   if (!preset) return emptyBank();
@@ -453,7 +490,12 @@ function App() {
   // null | {kind:'loading'} | {kind:'ready', name} | {kind:'failed'} — surfaced on the splash
   const [shareStatus, setShareStatus] = useState(null);
   // Global mix state: master GLUE + sidechain config. Per-slot drive lives on slot.drive.
-  const [mix, setMix] = useState({ glue: 0.35, sidechain: { amount: 0.5, targets: [0, 1, 2, 3, 4, 5, 6, 7].filter(i => false) } });
+  // Initial targets are derived from the initial bank's bass/tonal slots so the
+  // feature is discoverable on first run (BOOM-BAP starts with 808 in slot 8).
+  const [mix, setMix] = useState(() => ({
+    glue: 0.35,
+    sidechain: { amount: 0.5, targets: deriveSidechainTargets(bankFromPreset('BOOM-BAP').slots) },
+  }));
   const [mixOpen, setMixOpen] = useState(false);
 
   // Popover/picker state: {slotIdx, anchor}
@@ -510,9 +552,18 @@ function App() {
     setPatternName(value.name);
     setCurrentKit(value.kit ?? null);
     setKitModified(false);
-    if (value.mix) setMix(value.mix);
     const firstPresent = value.bankPresent.findIndex(Boolean);
-    setEditBank(firstPresent >= 0 ? firstPresent : 0);
+    const editIdx = firstPresent >= 0 ? firstPresent : 0;
+    const editSlots = value.banks[editIdx]?.slots ?? [];
+    setMix(prev => {
+      const base = value.mix ?? prev;
+      const existing = base.sidechain?.targets ?? [];
+      // Auto-migrate v4 patterns saved with the old empty default. Respect any
+      // non-empty explicit target list the user saved.
+      const targets = existing.length ? existing : deriveSidechainTargets(editSlots);
+      return { ...base, sidechain: { ...(base.sidechain ?? prev.sidechain), targets } };
+    });
+    setEditBank(editIdx);
     setActivePreset(null);
     setToast({ kind: 'ok', text: `Loaded shared pattern: ${value.name}` });
   }, []);
@@ -699,10 +750,20 @@ function App() {
   const setBankSwing = (v) => updateEditBank(b => ({ ...b, swing: Math.round(Math.max(0, Math.min(66, v))) }));
 
   const assignSlotSound = (slotIdx, soundKey) => {
+    const prevSound = bank.slots[slotIdx]?.sound;
     updateSlot(slotIdx, s => reassignSlotSound(s, soundKey));
+    // Sidechain target list reflects the slot's new sound: bass/tonal sounds
+    // are auto-added; non-target sounds are auto-removed. Other slots' manual
+    // unchecks are preserved by the delta update.
+    setMix(prev => ({
+      ...prev,
+      sidechain: {
+        ...prev.sidechain,
+        targets: updateTargetsForSlotChange(prev.sidechain.targets, slotIdx, prevSound, soundKey),
+      },
+    }));
     setPalettePopover(null);
     setActivePreset(null);
-    // Manual slot change marks the loaded kit as "modified" for display.
     if (currentKit) setKitModified(true);
   };
 
@@ -718,12 +779,21 @@ function App() {
   const applyPreset = (name) => {
     const preset = PRESETS[name];
     if (!preset) return;
+    const prevSlots = bank.slots;
     const nb = bankFromPreset(name);
     setBanks(prev => prev.map((b, i) => (i === editBank ? nb : b)));
     setBpmState(preset.bpm);
     setActivePreset(name);
     setCurrentKit(preset.kitId);
     setKitModified(false);
+    // Recompute sidechain targets — preset loads new sounds in every slot.
+    setMix(prev => ({
+      ...prev,
+      sidechain: {
+        ...prev.sidechain,
+        targets: recomputeTargetsForSlots(prev.sidechain.targets, prevSlots, nb.slots),
+      },
+    }));
   };
   const clearEditBank = () => {
     // Clears patterns only — kit, slot assignments, mix and config are preserved
@@ -737,18 +807,22 @@ function App() {
 
   // ----- Kits -----
   const loadKit = (kit) => {
-    updateEditBank(b => ({
-      ...b,
-      slots: slotsFromKit(kit, b.slots, true),
-    }));
+    const prevSlots = bank.slots;
+    const newSlots = slotsFromKit(kit, prevSlots, true);
+    updateEditBank(b => ({ ...b, slots: newSlots }));
     setCurrentKit(kit.id);
     setKitModified(false);
     setActivePreset(null);
     setKitsPopover(null);
-    // Apply kit's master mix preset on top of existing mix (glue, etc.)
-    if (kit.masterMix) {
-      setMix(prev => ({ ...prev, ...kit.masterMix }));
-    }
+    // Master mix preset + recompute sidechain targets across all 8 slot changes.
+    setMix(prev => ({
+      ...prev,
+      ...(kit.masterMix || {}),
+      sidechain: {
+        ...prev.sidechain,
+        targets: recomputeTargetsForSlots(prev.sidechain.targets, prevSlots, newSlots),
+      },
+    }));
     setToast({ kind: 'ok', text: `Loaded kit: ${kit.name}` });
   };
 
@@ -814,11 +888,18 @@ function App() {
     setDelayTime(value.delayTime);
     setPatternName(value.name);
     const firstPresent = value.bankPresent.findIndex(Boolean);
-    setEditBank(firstPresent >= 0 ? firstPresent : 0);
+    const editIdx = firstPresent >= 0 ? firstPresent : 0;
+    setEditBank(editIdx);
     setActivePreset(null);
     setCurrentKit(value.kit ?? null);
     setKitModified(false);
-    if (value.mix) setMix(value.mix);
+    const editSlots = value.banks[editIdx]?.slots ?? [];
+    setMix(prev => {
+      const base = value.mix ?? prev;
+      const existing = base.sidechain?.targets ?? [];
+      const targets = existing.length ? existing : deriveSidechainTargets(editSlots);
+      return { ...base, sidechain: { ...(base.sidechain ?? prev.sidechain), targets } };
+    });
     setImportOpen(false);
     const w = warnings?.length ? ` (${warnings.length} warning${warnings.length > 1 ? 's' : ''})` : '';
     setToast({ kind: 'ok', text: `Loaded: ${value.name}${w}` });

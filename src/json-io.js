@@ -19,6 +19,7 @@ import {
   defaultFilter,
   defaultChord,
 } from "./sounds.js";
+import { MELODY_KEY_NAMES, DEFAULT_MELODY_KEY } from "./scales.js";
 
 const SLOT_COUNT = 8;
 const BANK_LETTERS = ["A", "B", "C", "D"];
@@ -792,6 +793,19 @@ function parseSlot(v, base, errors, warnings) {
         melody.push({ step: n.step, pitch: pitchMidi, length, velocity, probability });
       }
       slot.melody = melody;
+
+      // melodyKey: used by the editor for snap-to-scale. Only meaningful when
+      // the slot is in melody mode; default to the UI's default if missing or invalid.
+      if ("melodyKey" in v) {
+        if (typeof v.melodyKey === "string" && MELODY_KEY_NAMES.includes(v.melodyKey)) {
+          slot.melodyKey = v.melodyKey;
+        } else {
+          errors.push({ path: path("melodyKey"), message: `melodyKey must be one of: ${MELODY_KEY_NAMES.join(", ")}.` });
+          slot.melodyKey = DEFAULT_MELODY_KEY;
+        }
+      } else {
+        slot.melodyKey = DEFAULT_MELODY_KEY;
+      }
     }
   }
 
@@ -848,6 +862,7 @@ function parseSlot(v, base, errors, warnings) {
     "glide",
     "notes",
     "melody",
+    "melodyKey",
     "filter",
     "chordType",
     "tunable",
@@ -965,8 +980,11 @@ function slotToJson(s) {
   if (hasChord(s.sound) && s.chordType) out.chordType = s.chordType;
   if (tunableValues(s.sound) && s.tunable) out.tunable = s.tunable;
 
-  // v4 melody (pitched only) — supersedes the notes string when present
-  if (isPitched(s.sound) && Array.isArray(s.melody) && s.melody.length) {
+  // v4 melody (pitched only) — supersedes the notes string when present.
+  // Also serialize melodyKey alongside the array (it's UI-tied and meaningless
+  // without melody mode; emit even when the array is empty so an empty-melody
+  // slot still round-trips the key choice).
+  if (isPitched(s.sound) && Array.isArray(s.melody)) {
     const VEL_NAME = ["soft", "medium", "loud"];
     out.melody = s.melody.map((n) => {
       const item = {
@@ -978,6 +996,7 @@ function slotToJson(s) {
       if (n.probability !== 100) item.probability = n.probability;
       return item;
     });
+    if (s.melodyKey && s.melodyKey !== DEFAULT_MELODY_KEY) out.melodyKey = s.melodyKey;
   }
   return out;
 }

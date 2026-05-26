@@ -20,18 +20,7 @@ function noteLabel(midi) {
   return `${NOTE_NAMES[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1}`;
 }
 
-// Scale definitions — semitone classes (0..11)
-const SCALES = {
-  'A minor':  { root: 9,  scale: [0, 2, 3, 5, 7, 8, 10] },
-  'A major':  { root: 9,  scale: [0, 2, 4, 5, 7, 9, 11] },
-  'C major':  { root: 0,  scale: [0, 2, 4, 5, 7, 9, 11] },
-  'C minor':  { root: 0,  scale: [0, 2, 3, 5, 7, 8, 10] },
-  'D minor':  { root: 2,  scale: [0, 2, 3, 5, 7, 8, 10] },
-  'E minor':  { root: 4,  scale: [0, 2, 3, 5, 7, 8, 10] },
-  'F minor':  { root: 5,  scale: [0, 2, 3, 5, 7, 8, 10] },
-  'F# minor': { root: 6,  scale: [0, 2, 3, 5, 7, 8, 10] },
-  'G minor':  { root: 7,  scale: [0, 2, 3, 5, 7, 8, 10] },
-};
+import { SCALES, DEFAULT_MELODY_KEY } from './scales.js';
 
 function isPolyphonic(soundKey) {
   return soundKey === 'chord-stab' || soundKey === 'pad';
@@ -44,8 +33,8 @@ export function MelodyEditor({ slot, slotIdx, currentStep, onChange, onMelKey })
   const NOTES_SHOWN = 24;
   const melody = slot.melody || [];
 
-  const keyName = slot.melodyKey || 'A minor';
-  const { root: keyRoot, scale: keyScale } = SCALES[keyName] || SCALES['A minor'];
+  const keyName = slot.melodyKey || DEFAULT_MELODY_KEY;
+  const { root: keyRoot, scale: keyScale } = SCALES[keyName] || SCALES[DEFAULT_MELODY_KEY];
   const inScale = useMemo(() => {
     const out = new Set();
     for (const semi of keyScale) out.add(semi);
