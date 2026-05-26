@@ -115,17 +115,29 @@ function setSlotDelSend(routing, slotIdx, v) {
   if (g) g.gain.value = v;
 }
 
+// Sounds in the bass category get their post-drive harmonics tamed by an
+// inline lowpass. Non-bass slots keep their highs.
+const BASS_SOUNDS = new Set(['808', 'sub-bass', 'synth-bass', 'acid-bass', 'reese-bass']);
+function setSlotBassFilter(routing, slotIdx, sound) {
+  const lpf = routing.slotBassLpf[slotIdx];
+  if (!lpf) return;
+  lpf.frequency.value = BASS_SOUNDS.has(sound) ? 2500 : 20000;
+}
+
 // Schedule a sidechain duck event at `time` on the slot's ducker gain. amount
 // is 0..1 (depth); ducker dives to (1-amount) at the trigger time and recovers
 // linearly over `recoveryMs`.
-function triggerDuck(routing, slotIdx, time, amount, recoveryMs = 150) {
+function triggerDuck(routing, slotIdx, time, amount /*, recoveryMs unused */) {
   const d = routing.slotDucker[slotIdx];
   if (!d) return;
   const minGain = Math.max(0, 1 - amount);
   try { d.gain.cancelScheduledValues(time); } catch {}
   d.gain.setValueAtTime(1, Math.max(0, time - 0.0001));
+  // Snappy duck attack (5ms linear), then exponential recovery toward 1.
+  // setTargetAtTime with τ=0.06 reaches ~63% in 60ms and ~95% by 180ms,
+  // which feels analog-VCA-creamy instead of the previous jagged linear ramp.
   d.gain.linearRampToValueAtTime(minGain, time + 0.005);
-  d.gain.linearRampToValueAtTime(1, time + recoveryMs / 1000);
+  d.gain.setTargetAtTime(1, time + 0.005, 0.06);
 }
 
 // Compute per-step glide source pitches for a pitched slot, considering the
@@ -221,22 +233,45 @@ function buildRouting(ctx, opts) {
     slotDrives = {},
     slotRevSends = {},
     slotDelSends = {},
+    slotSounds = {},
   } = opts;
 
   // ---- master GLUE chain ----
   const limiter = ctx.createDynamicsCompressor();
-  // Looser ceiling (was -0.3 dB) so the limiter only catches the very loudest
-  // peaks instead of riding the entire signal. -1.5 dB leaves audible headroom.
-  limiter.threshold.value = -1.5;
+  // Softened limiter envelopes — 3ms attack lets the fastest transients
+  // through (those get handled by the band-split saturator upstream) while
+  // 80ms release lets bass content breathe instead of getting squashed.
+  // Threshold at -0.5 dB keeps a safe ceiling with audible headroom.
+  limiter.threshold.value = -0.5;
   limiter.knee.value = 0;
   limiter.ratio.value = 20;
-  limiter.attack.value = 0.001;
-  limiter.release.value = 0.05;
+  limiter.attack.value = 0.003;
+  limiter.release.value = 0.08;
   limiter.connect(ctx.destination);
+
+  // Band-split saturator: post-compressor we fork into a clean low band and a
+  // saturated high band, then recombine before the limiter. Saturating subs
+  // directly produces the "speaker blasting" feel; this is how mastering chains
+  // handle the problem.
+  const recombine = ctx.createGain();
+  recombine.gain.value = 1;
+  recombine.connect(limiter);
 
   const saturator = ctx.createWaveShaper();
   saturator.oversample = '4x';
-  saturator.connect(limiter);
+  saturator.connect(recombine);
+
+  const splitHigh = ctx.createBiquadFilter();
+  splitHigh.type = 'highpass';
+  splitHigh.frequency.value = 150;
+  splitHigh.Q.value = 0.5;
+  splitHigh.connect(saturator);
+
+  const splitLow = ctx.createBiquadFilter();
+  splitLow.type = 'lowpass';
+  splitLow.frequency.value = 150;
+  splitLow.Q.value = 0.5;
+  splitLow.connect(recombine);
 
   const compressor = ctx.createDynamicsCompressor();
   compressor.ratio.value = 2;
@@ -244,7 +279,8 @@ function buildRouting(ctx, opts) {
   compressor.attack.value = 0.01;
   compressor.release.value = 0.1;
   compressor.threshold.value = -8;
-  compressor.connect(saturator);
+  compressor.connect(splitLow);
+  compressor.connect(splitHigh);
 
   // Master sum node — all sources merge here pre-glue
   const master = ctx.createGain();
@@ -255,7 +291,13 @@ function buildRouting(ctx, opts) {
   master.connect(compressor);
 
   // ---- persistent per-slot chain ----
-  const slotVol = {}, slotDrive = {}, slotDucker = {};
+  // Chain: voice → velTrim → slotVol → slotDrive → slotBassLpf → slotDucker → fan.
+  // slotBassLpf is a lowpass that cuts harsh upper harmonics produced by the
+  // drive saturator. For non-bass slots its cutoff is set to 20 kHz (effectively
+  // bypassed); for bass-category sounds (808/sub-bass/synth-bass/acid-bass/
+  // reese-bass) it's pulled down to 2.5 kHz so the drive's fizz disappears
+  // without touching the fundamental or musically useful low-mids.
+  const slotVol = {}, slotDrive = {}, slotBassLpf = {}, slotDucker = {};
   const slotBuses = {}, slotRevSend = {}, slotDelSend = {};
   for (const i of SLOT_INDICES) {
     slotVol[i] = ctx.createGain();
@@ -263,7 +305,11 @@ function buildRouting(ctx, opts) {
 
     slotDrive[i] = ctx.createWaveShaper();
     slotDrive[i].oversample = '2x';
-    // initial curve set by setSlotDrive(routing, i, ...)
+
+    slotBassLpf[i] = ctx.createBiquadFilter();
+    slotBassLpf[i].type = 'lowpass';
+    slotBassLpf[i].frequency.value = 20000;
+    slotBassLpf[i].Q.value = 0.7;
 
     slotDucker[i] = ctx.createGain();
     slotDucker[i].gain.value = 1;
@@ -279,7 +325,8 @@ function buildRouting(ctx, opts) {
     slotDelSend[i].gain.value = slotDelSends[i] ?? 0;
 
     slotVol[i].connect(slotDrive[i]);
-    slotDrive[i].connect(slotDucker[i]);
+    slotDrive[i].connect(slotBassLpf[i]);
+    slotBassLpf[i].connect(slotDucker[i]);
     slotDucker[i].connect(slotBuses[i]);
     slotDucker[i].connect(slotRevSend[i]);
     slotDucker[i].connect(slotDelSend[i]);
@@ -309,15 +356,18 @@ function buildRouting(ctx, opts) {
   }
 
   const routing = {
-    ctx, master, compressor, saturator, limiter,
-    slotVol, slotDrive, slotDucker, slotBuses, slotRevSend, slotDelSend,
+    ctx, master, compressor, saturator, splitLow, splitHigh, recombine, limiter,
+    slotVol, slotDrive, slotBassLpf, slotDucker, slotBuses, slotRevSend, slotDelSend,
     reverbIn, reverbWet, convolver,
     delayIn, delayNode, delayWet, feedback, fbFilter,
     glue,
   };
-  // Initialize curves
+  // Initialize curves and per-slot filter cutoffs
   applyGlue(routing, glue);
-  for (const i of SLOT_INDICES) setSlotDrive(routing, i, slotDrives[i] ?? 0);
+  for (const i of SLOT_INDICES) {
+    setSlotDrive(routing, i, slotDrives[i] ?? 0);
+    setSlotBassFilter(routing, i, slotSounds[i]);
+  }
   return routing;
 }
 
@@ -360,7 +410,7 @@ class DrumEngine {
     if (this.ctx) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     this.ctx = new AC();
-    const slotVolumes = {}, slotDrives = {}, slotRevSends = {}, slotDelSends = {};
+    const slotVolumes = {}, slotDrives = {}, slotRevSends = {}, slotDelSends = {}, slotSounds = {};
     const bank0 = this.banks[0];
     if (bank0) for (let i = 0; i < SLOT_COUNT; i++) {
       const s = bank0.slots[i] || {};
@@ -368,13 +418,14 @@ class DrumEngine {
       slotDrives[i] = s.drive ?? 0;
       slotRevSends[i] = s.reverbSend ?? 0;
       slotDelSends[i] = s.delaySend ?? 0;
+      slotSounds[i] = s.sound;
     }
     this.routing = buildRouting(this.ctx, {
       reverbAmount: bank0?.reverbAmount ?? 0.25,
       delayFeedback: this.delayFeedback,
       delayTimeSec: delaySeconds(this.bpm, this.delayTime),
       glue: this.mix.glue,
-      slotVolumes, slotDrives, slotRevSends, slotDelSends,
+      slotVolumes, slotDrives, slotRevSends, slotDelSends, slotSounds,
     });
   }
 
@@ -417,6 +468,7 @@ class DrumEngine {
       setSlotDrive(this.routing, i, s.drive ?? 0);
       setSlotRevSend(this.routing, i, s.reverbSend ?? 0);
       setSlotDelSend(this.routing, i, s.delaySend ?? 0);
+      setSlotBassFilter(this.routing, i, s.sound);
     }
   }
 
@@ -590,7 +642,7 @@ async function renderOffline({ banks, chain, bpm, delayFeedback, delayTime, samp
   }
 
   // Build the bank-0 slot params so the offline routing matches live playback
-  const slotVolumes = {}, slotDrives = {}, slotRevSends = {}, slotDelSends = {};
+  const slotVolumes = {}, slotDrives = {}, slotRevSends = {}, slotDelSends = {}, slotSounds = {};
   const bank0 = banks[chain[0]];
   if (bank0) for (let i = 0; i < SLOT_COUNT; i++) {
     const s = bank0.slots[i] || {};
@@ -598,14 +650,15 @@ async function renderOffline({ banks, chain, bpm, delayFeedback, delayTime, samp
     slotDrives[i] = s.drive ?? 0;
     slotRevSends[i] = s.reverbSend ?? 0;
     slotDelSends[i] = s.delaySend ?? 0;
+    slotSounds[i] = s.sound;
   }
 
   const routing = buildRouting(ctx, {
     reverbAmount: bank0?.reverbAmount ?? 0.25,
     delayFeedback,
     delayTimeSec,
-    glue: mix?.glue ?? 0.35,
-    slotVolumes, slotDrives, slotRevSends, slotDelSends,
+    glue: mix?.glue ?? 0,
+    slotVolumes, slotDrives, slotRevSends, slotDelSends, slotSounds,
   });
 
   const sidechain = mix?.sidechain ?? { amount: 0, targets: [] };
@@ -626,6 +679,7 @@ async function renderOffline({ banks, chain, bpm, delayFeedback, delayTime, samp
         const s = bank.slots[i] || {};
         try { routing.slotVol[i].gain.setValueAtTime(s.volume ?? 0.85, barStart); } catch {}
         setSlotDrive(routing, i, s.drive ?? 0);
+        setSlotBassFilter(routing, i, s.sound);
         try { routing.slotRevSend[i].gain.setValueAtTime(s.reverbSend ?? 0, barStart); } catch {}
         try { routing.slotDelSend[i].gain.setValueAtTime(s.delaySend ?? 0, barStart); } catch {}
       }

@@ -664,7 +664,9 @@ function triggerReeseBass(ctx, time, velocity, dest, opts = {}) {
 
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
-  lp.Q.value = 1 + f.resonance * 4;
+  // Resonance hard-capped at 0.6 — peaks above that amplify exactly the
+  // mid-range hash the band-split / slot LPF are trying to tame.
+  lp.Q.value = 1 + Math.min(0.6, f.resonance) * 4;
   const baseHz = 200 * Math.pow(18, f.cutoff);
   // LFO modulation across the gated note length.
   const samples = Math.max(16, Math.round(32 * (lfoDur / 0.7)));
@@ -678,7 +680,9 @@ function triggerReeseBass(ctx, time, velocity, dest, opts = {}) {
   const g = ctx.createGain();
   const stopAt = applyGatedEnvelope(g.gain, time, 0.55, 0.010, 0.400, 0.90, 0.290, gateSec);
 
-  for (const dt of [-15, +15]) {
+  // Tighter detune (was ±15 cents). ±10 cents still produces the reese's
+  // characteristic beating without pushing audible upper-mid hash.
+  for (const dt of [-10, +10]) {
     const osc = ctx.createOscillator();
     osc.type = 'sawtooth';
     osc.detune.value = dt;
