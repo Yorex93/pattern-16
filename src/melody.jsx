@@ -52,6 +52,18 @@ export function MelodyEditor({ slot, slotIdx, currentStep, onChange, onMelKey })
     return out;
   }, [keyScale]);
 
+  // Snap an out-of-scale MIDI pitch to the nearest in-scale pitch.
+  // Prefers the closer direction; ties go down (more natural for bass).
+  const snapToScale = (midiPitch) => {
+    const semi = ((midiPitch % 12) + 12) % 12;
+    if (inScale.has(semi)) return midiPitch;
+    for (let d = 1; d <= 6; d++) {
+      if (inScale.has(((semi - d) % 12 + 12) % 12)) return midiPitch - d;
+      if (inScale.has((semi + d) % 12)) return midiPitch + d;
+    }
+    return midiPitch;
+  };
+
   // Build a (pitch, step) → note lookup for hit-testing
   const noteAt = useMemo(() => {
     const map = {};
@@ -108,13 +120,16 @@ export function MelodyEditor({ slot, slotIdx, currentStep, onChange, onMelKey })
       // Remove
       onChange(melody.filter((_, j) => j !== i));
     } else {
-      // Place a new note. For mono slots, remove any existing note at the same step.
+      // Place a new note. Snap to the key's scale unless alt-clicked (which
+      // explicitly opts into chromaticism).
+      const placedPitch = e.altKey ? pitch : snapToScale(pitch);
+      // For mono slots, remove any existing note whose span covers this step.
       const filtered = poly ? melody : melody.filter(n => {
-        // Drop notes whose span covers this step
         return !(n.step <= step && step < n.step + (n.length || 1));
       });
-      const next = [...filtered, { step, pitch, length: 1, velocity: e.shiftKey ? 2 : 1, probability: 100 }];
-      // Limit polyphony to 4 simultaneous notes on this step
+      // For poly slots, skip if the snapped pitch already exists at this step.
+      if (poly && filtered.some(n => n.step === step && n.pitch === placedPitch)) return;
+      const next = [...filtered, { step, pitch: placedPitch, length: 1, velocity: e.shiftKey ? 2 : 1, probability: 100 }];
       if (poly) {
         const sameStep = next.filter(n => n.step === step);
         if (sameStep.length > 4) return;
@@ -181,7 +196,7 @@ export function MelodyEditor({ slot, slotIdx, currentStep, onChange, onMelKey })
           );
         })}
       </div>
-      <div className="melody-hint">CLICK: PLACE/REMOVE · SHIFT-CLICK: VELOCITY · ALT-CLICK: PROBABILITY</div>
+      <div className="melody-hint">CLICK: PLACE (SNAPS TO {keyName.toUpperCase()}) · ALT-CLICK EMPTY: CHROMATIC · SHIFT-CLICK NOTE: VELOCITY · ALT-CLICK NOTE: PROBABILITY</div>
     </div>
   );
 }

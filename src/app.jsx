@@ -1026,29 +1026,29 @@ function App() {
                     <span className="row-pulse" key={flash[ri] || 0} />
                   </div>
                   <VolumeSlider value={slot.volume} onChange={(v) => setSlotVolume(ri, v)} />
-                  <div className="row-sends">
+                  <div className="row-cluster">
                     <MiniSend value={slot.reverbSend} onChange={(v) => setSlotRevSend(ri, v)} letter="R" color="rev" />
                     <MiniSend value={slot.delaySend} onChange={(v) => setSlotDelSend(ri, v)} letter="D" color="del" />
                     <MiniSend value={slot.drive ?? 0} onChange={(v) => setSlotDrive(ri, v)} letter="X" color="drv" />
-                  </div>
-                  <button
-                    className={`slot-gear ${(slot.glide || hasChord(slot.sound) || hasFilter(slot.sound) || tunableValues(slot.sound)) ? 'has' : ''}`}
-                    onClick={(e) => setSlotSettings({ slotIdx: ri, anchor: e.currentTarget })}
-                    title="Slot settings"
-                    aria-label="Slot settings"
-                  >·</button>
-                  {pitched && (
                     <button
-                      className={`mel-btn ${slot.melody ? 'on' : ''}`}
-                      onClick={() => toggleSlotMelody(ri)}
-                      title={slot.melody ? 'Switch back to grid mode' : 'Switch to melody (piano-roll) mode'}
-                    >MEL</button>
-                  )}
-                  <button
-                    className={`mute ${slot.mute ? 'on' : ''}`}
-                    onClick={() => toggleSlotMute(ri)}
-                    aria-label="Mute"
-                  >M</button>
+                      className={`slot-gear ${(slot.glide || hasChord(slot.sound) || hasFilter(slot.sound) || tunableValues(slot.sound)) ? 'has' : ''}`}
+                      onClick={(e) => setSlotSettings({ slotIdx: ri, anchor: e.currentTarget })}
+                      title="Slot settings"
+                      aria-label="Slot settings"
+                    >·</button>
+                    <button
+                      className={`mute ${slot.mute ? 'on' : ''}`}
+                      onClick={() => toggleSlotMute(ri)}
+                      aria-label="Mute"
+                    >M</button>
+                    {pitched && (
+                      <button
+                        className={`mel-btn ${slot.melody ? 'on' : ''}`}
+                        onClick={() => toggleSlotMelody(ri)}
+                        title={slot.melody ? 'Switch back to grid mode' : 'Switch to melody (piano-roll) mode'}
+                      >MEL</button>
+                    )}
+                  </div>
                 </div>
                 {pitched && slot.melody ? (
                   <MelodyEditor

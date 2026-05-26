@@ -562,7 +562,27 @@
   .row.muted .step.on.v2 .step-led { background: var(--ink-faint); box-shadow: none; }
   .row.muted .step-prob-dot { opacity: 0.3; }
 
-  .row-ctrls { display: flex; align-items: center; gap: 8px; }
+  .row-ctrls { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  /* All the right-side controls live in one cluster. Use CSS Grid with a fixed
+     5-column layout: R/D/X + gear + mute on row 1, MEL (when present) spanning
+     all 5 columns on row 2. Grid columns are sized to content, so the cluster
+     width is locked to the natural width of the five compact controls — MEL
+     can't blow up the cluster like it would under flex with basis:100%. */
+  .row-cluster {
+    display: grid;
+    grid-template-columns: repeat(5, min-content);
+    grid-auto-rows: min-content;
+    gap: 4px;
+    align-items: center;
+    justify-items: center;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+  .row-cluster .mel-btn {
+    grid-column: 1 / -1;
+    width: 100%;
+    height: 18px;
+  }
 
   /* Row label + sample slot */
   .row-name-wrap { display: flex; align-items: center; gap: 6px; min-width: 130px; position: relative; }
@@ -640,9 +660,6 @@
   .vol-fill { position: absolute; left: 0; top: 0; height: 100%; background: linear-gradient(90deg, oklch(0.58 0.14 60), var(--accent)); box-shadow: 0 0 6px rgba(245,168,80,0.4); }
   .vol-thumb { position: absolute; top: 50%; width: 10px; height: 16px; background: linear-gradient(180deg, #4a3f33, #2a2218); border: 1px solid #0a0805; border-radius: 2px; transform: translate(-50%, -50%); pointer-events: none; box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), 0 2px 4px rgba(0,0,0,0.5); }
   .vol-thumb::after { content: ''; position: absolute; inset: 4px 3px; border-top: 1px solid rgba(255,255,255,0.1); border-bottom: 1px solid rgba(255,255,255,0.1); }
-
-  /* Per-row sends container */
-  .row-sends { display: flex; gap: 4px; flex-shrink: 0; }
 
   /* Mute */
   .mute {
