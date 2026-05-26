@@ -1,8 +1,9 @@
 import { Fragment, useState, useEffect, useRef, useCallback } from 'react';
 import { DrumEngine, renderOffline, trimSilentTail, encodeWav, SLOT_COUNT } from './audio-engine.js';
 import { Splash, Knob, MiniSend, VolumeSlider, PlayButton, BPMControl, PitchedStep, PercStep } from './components.jsx';
-import { ImportJsonModal, ExportJsonModal } from './json-modals.jsx';
+import { ImportJsonModal, ExportJsonModal, ShareModal } from './json-modals.jsx';
 import { AI_SYSTEM_PROMPT } from './json-io.js';
+import { readShareFromHash, clearShareHash, decodeShare } from './share.js';
 import {
   PALETTE, CATEGORIES, SOUND_KEYS, CHORD_TYPES,
   isPitched, hasFilter, hasChord, tunableValues, isContinuous, defaultNote, defaultFilter, defaultChord,
@@ -445,6 +446,9 @@ function App() {
   const [patternName, setPatternName] = useState('untitled');
   const [importOpen, setImportOpen] = useState(false);
   const [exportJsonOpen, setExportJsonOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  // null | {kind:'loading'} | {kind:'ready', name} | {kind:'failed'} — surfaced on the splash
+  const [shareStatus, setShareStatus] = useState(null);
 
   // Popover/picker state: {slotIdx, anchor}
   const [palettePopover, setPalettePopover] = useState(null);
@@ -457,15 +461,22 @@ function App() {
 
   const bank = banks[editBank];
 
+  // Refs let start() read the latest state at click-time. Otherwise a pattern
+  // loaded async from a share URL would be replaced by the stale closure value
+  // when the splash gate boots the engine.
+  const stateRef = useRef();
+  stateRef.current = { banks, chain, bpm, delayFeedback, delayTime };
+
   const start = useCallback(() => {
     if (!engineRef.current) {
+      const s = stateRef.current;
       const eng = new DrumEngine();
       eng.init();
-      eng.setBanks(banks);
-      eng.setChain(chain);
-      eng.setBPM(bpm);
-      eng.setDelayFeedback(delayFeedback);
-      eng.setDelayTime(delayTime);
+      eng.setBanks(s.banks);
+      eng.setChain(s.chain);
+      eng.setBPM(s.bpm);
+      eng.setDelayFeedback(s.delayFeedback);
+      eng.setDelayTime(s.delayTime);
       engineRef.current = eng;
     }
     setStarted(true);
@@ -476,6 +487,56 @@ function App() {
   useEffect(() => { engineRef.current?.setBPM(bpm); }, [bpm]);
   useEffect(() => { engineRef.current?.setDelayFeedback(delayFeedback); }, [delayFeedback]);
   useEffect(() => { engineRef.current?.setDelayTime(delayTime); }, [delayTime]);
+
+  // Apply a successfully-decoded shared pattern to the live state. Pulled out
+  // so we can call it both on initial mount and on `hashchange` events (when a
+  // user pastes a share URL into a tab that already has the app loaded).
+  const applySharedPattern = useCallback((value) => {
+    setBanks(value.banks);
+    setChain(value.chain);
+    setBpmState(value.bpm);
+    setDelayFeedback(value.delayFeedback);
+    setDelayTime(value.delayTime);
+    setPatternName(value.name);
+    setCurrentKit(value.kit ?? null);
+    setKitModified(false);
+    const firstPresent = value.bankPresent.findIndex(Boolean);
+    setEditBank(firstPresent >= 0 ? firstPresent : 0);
+    setActivePreset(null);
+    setToast({ kind: 'ok', text: `Loaded shared pattern: ${value.name}` });
+  }, []);
+
+  // Load a pattern from a #p=… share link. Runs on mount AND on hashchange so
+  // pasting a link into an already-loaded tab also works. Behind the splash
+  // gate the recipient's first audible sound is the sender's beat.
+  useEffect(() => {
+    let cancelled = false;
+    const tryLoad = (enc) => {
+      if (!enc) return;
+      clearShareHash();
+      setShareStatus({ kind: 'loading' });
+      decodeShare(enc).then(result => {
+        if (cancelled) return;
+        if (!result.ok) {
+          console.warn('[Pattern-16] share decode failed:', result.errors);
+          setShareStatus({ kind: 'failed' });
+          setToast('Couldn’t load shared pattern — the link may be corrupt or from a newer version. Starting with default pattern.');
+          return;
+        }
+        applySharedPattern(result.value);
+        setShareStatus({ kind: 'ready', name: result.value.name });
+      });
+    };
+    // Initial mount
+    tryLoad(readShareFromHash());
+    // Subsequent hash changes (pasting URL into same tab)
+    const onHash = () => tryLoad(readShareFromHash());
+    window.addEventListener('hashchange', onHash);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('hashchange', onHash);
+    };
+  }, [applySharedPattern]);
 
   // Playback indicator + slot flashes
   useEffect(() => {
@@ -755,7 +816,7 @@ function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [started, playing]);
 
-  if (!started) return <Splash onStart={start} />;
+  if (!started) return <Splash onStart={start} shareStatus={shareStatus} />;
 
   const playingBankIdx = chain[(playState.chainIdx) % chain.length] ?? 0;
 
@@ -803,6 +864,7 @@ function App() {
             <div className="json-cluster-btns">
               <button className="json-cluster-btn" onClick={() => setImportOpen(true)} title="Import pattern from JSON">IMPORT</button>
               <button className="json-cluster-btn" onClick={() => setExportJsonOpen(true)} title="Export current pattern as JSON">EXPORT</button>
+              <button className="json-cluster-btn share" onClick={() => setShareOpen(true)} title="Create a shareable URL of this pattern">SHARE</button>
               <button className="json-cluster-btn ai" onClick={copyAiPrompt} title="Copy AI system prompt to clipboard">AI</button>
             </div>
           </div>
@@ -1038,6 +1100,13 @@ function App() {
         <ExportJsonModal
           state={{ name: patternName, bpm, banks, chain, delayTime, delayFeedback, editBank, kit: currentKit }}
           onClose={() => setExportJsonOpen(false)}
+          onToast={(text) => setToast({ kind: 'ok', text })}
+        />
+      )}
+      {shareOpen && (
+        <ShareModal
+          state={{ name: patternName, bpm, banks, chain, delayTime, delayFeedback, editBank, kit: currentKit }}
+          onClose={() => setShareOpen(false)}
           onToast={(text) => setToast({ kind: 'ok', text })}
         />
       )}

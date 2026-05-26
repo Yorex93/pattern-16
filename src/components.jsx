@@ -1,7 +1,8 @@
 // Shared UI primitives for Pattern-16.
 import { useState, useEffect, useRef } from 'react';
 
-function Splash({ onStart }) {
+function Splash({ onStart, shareStatus }) {
+  // shareStatus: null | {kind: 'loading'} | {kind: 'ready', name} | {kind: 'failed'}
   return (
     <div className="splash">
       <div className="splash-card">
@@ -14,6 +15,13 @@ function Splash({ onStart }) {
           <div className="splash-eyebrow">PATTERN-16 · DRUM MACHINE</div>
           <h1>Click anywhere to power on</h1>
           <p>Audio output requires a tap. Headphones recommended.</p>
+          {shareStatus && (
+            <div className={`splash-share-status ${shareStatus.kind}`}>
+              {shareStatus.kind === 'loading' && <>↻ Decoding shared pattern…</>}
+              {shareStatus.kind === 'ready' && <>● Shared pattern ready: <strong>{shareStatus.name}</strong></>}
+              {shareStatus.kind === 'failed' && <>⚠ Couldn’t load shared pattern — starting with default.</>}
+            </div>
+          )}
         </div>
         <button className="splash-btn" onClick={onStart}>
           <span className="dot" /> POWER ON

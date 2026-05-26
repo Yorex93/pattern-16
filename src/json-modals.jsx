@@ -1,5 +1,6 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { parsePattern, serializePattern } from './json-io.js';
+import { encodeShare, buildShareUrl } from './share.js';
 
 function ImportJsonModal({ onClose, onLoad }) {
   const [text, setText] = useState('');
@@ -152,4 +153,95 @@ function ExportJsonModal({ state, onClose, onToast }) {
   );
 }
 
-export { ImportJsonModal, ExportJsonModal };
+function ShareModal({ state, onClose, onToast }) {
+  const [url, setUrl] = useState('');
+  const [error, setError] = useState(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    encodeShare(state).then(enc => {
+      if (cancelled) return;
+      setUrl(buildShareUrl(enc));
+    }).catch(e => {
+      if (cancelled) return;
+      setError(e.message || String(e));
+    });
+    return () => { cancelled = true; };
+  }, []); // intentionally only encode once, on open
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      onToast('Share link copied to clipboard');
+    } catch {
+      // Fall back to selecting the input so the user can copy manually
+      inputRef.current?.select();
+      onToast('Couldn’t copy automatically — select the text and copy manually.');
+    }
+  };
+
+  const nativeShare = async () => {
+    if (!navigator.share) return copy();
+    try {
+      await navigator.share({
+        title: `Pattern-16 — ${state.name || 'untitled'}`,
+        text: 'Listen to this beat',
+        url,
+      });
+    } catch (e) {
+      // User cancelled the native share sheet — silent
+      if (e?.name !== 'AbortError') copy();
+    }
+  };
+
+  const len = url.length;
+  const tooLong = len > 2000;
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <span>SHARE LINK</span>
+          <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
+        </div>
+        <div className="modal-body">
+          {error && (
+            <div className="json-errors"><div className="json-errors-title">ENCODING FAILED</div>
+              <ul><li><span>{error}</span></li></ul>
+            </div>
+          )}
+          {!error && (
+            <>
+              <div className="share-hint">Anyone with this link will load your pattern — no server, no account.</div>
+              <input
+                ref={inputRef}
+                className="json-name-input share-url"
+                value={url || 'encoding…'}
+                readOnly
+                onFocus={(e) => e.target.select()}
+                spellCheck={false}
+              />
+              {url && (
+                <div className={`share-meta ${tooLong ? 'warn' : ''}`}>
+                  {tooLong
+                    ? `This link is long (${len} chars). It will work in most places but some chat apps may truncate it. Consider using EXPORT for very complex patterns.`
+                    : `Link is ${len} characters — should work everywhere.`}
+                </div>
+              )}
+              <div className="modal-actions">
+                <button className="json-btn ghost" onClick={onClose}>CLOSE</button>
+                {typeof navigator !== 'undefined' && navigator.share && (
+                  <button className="json-btn" onClick={nativeShare} disabled={!url}>SHARE…</button>
+                )}
+                <button className="json-btn primary" onClick={copy} disabled={!url}>COPY LINK</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export { ImportJsonModal, ExportJsonModal, ShareModal };
