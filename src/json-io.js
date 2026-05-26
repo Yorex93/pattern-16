@@ -1219,6 +1219,59 @@ MIX HEURISTICS
 - DnB / jungle: glue 0.5, sidechain 0.5 on reese+sub, drive 0.2 on snare/break.
 - Ambient: glue 0.25, no sidechain, no drive — let the air breathe.
 
+MIX HYGIENE — AVOIDING NOISE WASH AND HARSH OUTPUT
+Generated patterns often layer too much atmosphere and end up sounding washed out, rustly, or screechy. These are mix problems, not pattern problems — prevent them by following these rules.
+
+Atmosphere layers — pick at most two
+"Atmosphere" means continuous or near-continuous noise/texture sources. Specifically:
+- shaker with x.o.x.o.x.o.x.o. or similar steady 8th/16th patterns
+- tambourine with steady patterns
+- vinyl-bed (continuous by nature — any active step turns it on)
+- pad with long sustained notes (length ≥ 8)
+Rule: a pattern may have AT MOST TWO of these layers active. If you want shaker + pad, no vinyl-bed. If you want vinyl-bed + pad, no shaker. The lo-fi genre tempts you to use all three for "cozy atmosphere" — that's wrong. Stacking three layers of noise creates a wash that drowns out the actual musical elements (kick, snare, bass, chord-stab) and produces what users describe as "rustling" or "burning leaves."
+
+Pad reverb send when atmosphere is stacked: if a pad is present AND any other atmosphere layer is present, the pad's reverbSend must not exceed 0.30. A pad with reverbSend: 0.5+ plus a shaker plus heavy global reverb is the single most common cause of mix wash. Below 0.30 the pad still feels atmospheric; above 0.30 it dominates and competes with everything else.
+
+Reverb amount — calibrate to genre, not vibe
+The global sends.reverb.amount controls how much reverb the master mix receives. Higher is NOT more atmospheric — it's more washed out. Caps:
+- Boom-bap, trap, drill, house, acid-house, jungle-dnb: 0.15–0.25. These genres are dry. Reverb above 0.25 makes them sound amateur.
+- Lo-fi, afrobeats, ambient/downtempo: 0.25–0.35. These tolerate more reverb because they're inherently spacious, but going above 0.35 is where wash starts.
+- Never above 0.40. If you want a sense of space, achieve it through per-slot reverbSend on specific elements (snare, chord-stab, rim), not through a high global amount.
+
+Shaker reverb — almost always zero
+Shakers in real production run dry. Their reverb send should be 0.0 to 0.05, never higher. A shaker hits 8 to 16 times per bar; sending it to reverb creates a continuous reverb tail that becomes a wash. Even at "low" sends like 0.12, eight hits per bar produce overlapping reverb tails that read as continuous noise. Same rule for tambourine and any other high-frequency steady percussion.
+
+Bass driver caps — avoid screeching
+Heavy drive on bass voices creates harsh upper-mid harmonics that sound like screeching when combined with master GLUE. Caps:
+- drive on bass voices (808, sub-bass, synth-bass, acid-bass, reese-bass): 0.0–0.30 by default. Only push above 0.30 if the genre specifically demands aggressive saturation (drill 808s up to 0.40, acid bass up to 0.40 for squelch). Never above 0.50 unless the user explicitly asked for distortion.
+- When mix.glue is above 0.40, reduce bass drive by 0.10. Drive and glue compound; one or the other can be aggressive, not both.
+
+Volume hierarchy — atmosphere stays quiet
+Atmosphere should support the beat, not compete with it. Volume caps for atmospheric elements:
+- Shaker: 0.15–0.30. Above 0.30, it foregrounds and becomes annoying. The lo-fi default should be 0.18–0.25.
+- Tambourine: 0.20–0.35.
+- Vinyl-bed: 0.10–0.20. Above 0.20, it stops being subliminal and becomes obvious noise.
+- Pad: 0.30–0.45. Pads above 0.50 swallow the chord-stab and bass in the same frequency band.
+The kick, snare/clap, bass, and chord-stab are the elements the user is listening for. They should sit at 0.55–0.90. Atmosphere sits below them.
+
+Sidechain on chill patterns — keep it gentle
+For chill/lo-fi/ambient patterns (BPM under 100, sparse kicks): set mix.sidechain.amount between 0.05 and 0.15. Heavy pumping is for house and electronic genres where the kick is on every quarter. On a sparse kick pattern, heavy sidechain just makes the bass and chord feel choppy without the musical payoff. For dense kick patterns (four-on-floor house, trap, drill): 0.30–0.60 is fine.
+
+Delay feedback — moderate
+The delay's feedback field controls how many echoes you hear. Caps:
+- Default: 0.20–0.35. This produces 2–4 audible echoes that fade naturally.
+- Above 0.50: echoes pile up and become a wash. Only use for deliberate dub effects, never as a default.
+
+QUICK SELF-CHECK BEFORE OUTPUT
+- Count atmosphere layers (shaker, tambourine, vinyl-bed, sustained pad). Is it ≤ 2?
+- If pad + another atmosphere layer: is pad reverbSend ≤ 0.30?
+- Is shaker (and tambourine) reverbSend ≤ 0.05?
+- Is global reverb amount within the genre cap?
+- Is bass drive ≤ 0.30 (or ≤ 0.40 for drill 808s and acid bass)?
+- If glue > 0.40, is bass drive reduced accordingly?
+- Are atmosphere volumes below the foreground elements?
+- For chill/lo-fi patterns: is sidechain amount ≤ 0.15?
+
 MELODY MODE GUIDANCE
 - For pluck / pad / lead lines: ALWAYS use a melody array, not a notes string. The melody array supports multi-step note lengths which are essential for sustained pads. Example pad: one note at step 1 with length 16.
 - For 808 and synth-bass: a notes-string-with-grid is usually fine, but switch to melody when you need notes that don't fall on the grid or want explicit length control.

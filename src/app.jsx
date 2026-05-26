@@ -547,11 +547,17 @@ function ExportModal({ progress, onCancel }) {
 }
 
 function Toast({ message, onClose }) {
+  // Hold onClose in a ref so the auto-dismiss timer only resets when `message`
+  // actually changes — not on every parent re-render (the App re-renders many
+  // times per second during playback, which previously cancelled the timer
+  // before it could fire and the toast stuck around forever).
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
     if (!message) return;
-    const t = setTimeout(onClose, 4200);
+    const t = setTimeout(() => onCloseRef.current?.(), 4200);
     return () => clearTimeout(t);
-  }, [message, onClose]);
+  }, [message]);
   if (!message) return null;
   const isObj = typeof message === 'object';
   const text = isObj ? message.text : message;
