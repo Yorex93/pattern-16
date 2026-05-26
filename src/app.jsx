@@ -1108,6 +1108,7 @@ function App() {
           state={{ name: patternName, bpm, banks, chain, delayTime, delayFeedback, editBank, kit: currentKit }}
           onClose={() => setShareOpen(false)}
           onToast={(text) => setToast({ kind: 'ok', text })}
+          onNameChange={(n) => setPatternName(n)}
         />
       )}
       <Toast message={toast} onClose={() => setToast(null)} />

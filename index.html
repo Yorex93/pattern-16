@@ -1051,10 +1051,19 @@
     letter-spacing: 0.02em;
   }
   .share-url {
+    display: block;
+    width: 100%;
+    background: #0a0807;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    color: var(--ink);
     font-family: "JetBrains Mono", ui-monospace, monospace;
     font-size: 11px;
+    padding: 8px 10px;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
     word-break: break-all;
   }
+  .share-url:focus { outline: none; border-color: var(--accent); }
   .share-meta {
     margin-top: 8px;
     font-size: 10px;

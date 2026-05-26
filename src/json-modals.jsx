@@ -153,14 +153,19 @@ function ExportJsonModal({ state, onClose, onToast }) {
   );
 }
 
-function ShareModal({ state, onClose, onToast }) {
+function ShareModal({ state, onClose, onToast, onNameChange }) {
+  const [name, setName] = useState(state.name || 'untitled');
   const [url, setUrl] = useState('');
   const [error, setError] = useState(null);
   const inputRef = useRef(null);
 
+  // Re-encode whenever the name changes so the URL embeds the user's chosen
+  // name. Compression is fast (<10 ms for typical payloads) so debouncing
+  // would be overkill.
   useEffect(() => {
     let cancelled = false;
-    encodeShare(state).then(enc => {
+    setError(null);
+    encodeShare({ ...state, name }).then(enc => {
       if (cancelled) return;
       setUrl(buildShareUrl(enc));
     }).catch(e => {
@@ -168,9 +173,14 @@ function ShareModal({ state, onClose, onToast }) {
       setError(e.message || String(e));
     });
     return () => { cancelled = true; };
-  }, []); // intentionally only encode once, on open
+  }, [name]);
+
+  // Push the edited name back to the parent so it sticks for EXPORT etc.
+  const commitName = () => { if (onNameChange && name !== state.name) onNameChange(name); };
+  const handleClose = () => { commitName(); onClose(); };
 
   const copy = async () => {
+    commitName();
     try {
       await navigator.clipboard.writeText(url);
       onToast('Share link copied to clipboard');
@@ -183,9 +193,10 @@ function ShareModal({ state, onClose, onToast }) {
 
   const nativeShare = async () => {
     if (!navigator.share) return copy();
+    commitName();
     try {
       await navigator.share({
-        title: `Pattern-16 — ${state.name || 'untitled'}`,
+        title: `Pattern-16 — ${name || 'untitled'}`,
         text: 'Listen to this beat',
         url,
       });
@@ -199,11 +210,11 @@ function ShareModal({ state, onClose, onToast }) {
   const tooLong = len > 2000;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onClick={handleClose}>
       <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <span>SHARE LINK</span>
-          <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
+          <button className="modal-close" onClick={handleClose} aria-label="Close">×</button>
         </div>
         <div className="modal-body">
           {error && (
@@ -214,9 +225,20 @@ function ShareModal({ state, onClose, onToast }) {
           {!error && (
             <>
               <div className="share-hint">Anyone with this link will load your pattern — no server, no account.</div>
+              <div className="json-name-row">
+                <label className="json-name-label">NAME</label>
+                <input
+                  className="json-name-input"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="untitled"
+                  spellCheck={false}
+                  autoFocus
+                />
+              </div>
               <input
                 ref={inputRef}
-                className="json-name-input share-url"
+                className="share-url"
                 value={url || 'encoding…'}
                 readOnly
                 onFocus={(e) => e.target.select()}
@@ -230,7 +252,7 @@ function ShareModal({ state, onClose, onToast }) {
                 </div>
               )}
               <div className="modal-actions">
-                <button className="json-btn ghost" onClick={onClose}>CLOSE</button>
+                <button className="json-btn ghost" onClick={handleClose}>CLOSE</button>
                 {typeof navigator !== 'undefined' && navigator.share && (
                   <button className="json-btn" onClick={nativeShare} disabled={!url}>SHARE…</button>
                 )}
