@@ -7,24 +7,42 @@
 // Pitched slots optionally carry a `notes` array of 16 ints (semitone offset
 // from the sound's defaultNote; 0 if not retuned or step is off).
 
-import { SOUND_KEYS, PALETTE, CHORD_TYPES, isPitched, hasFilter, hasChord, tunableValues, defaultNote, defaultFilter, defaultChord } from './sounds.js';
+import {
+  SOUND_KEYS,
+  PALETTE,
+  CHORD_TYPES,
+  isPitched,
+  hasFilter,
+  hasChord,
+  tunableValues,
+  defaultNote,
+  defaultFilter,
+  defaultChord,
+} from "./sounds.js";
 
 const SLOT_COUNT = 8;
-const BANK_LETTERS = ['A', 'B', 'C', 'D'];
-const DELAY_OPTIONS = ['1/8', '1/4', '3/8', '1/2'];
+const BANK_LETTERS = ["A", "B", "C", "D"];
+const DELAY_OPTIONS = ["1/8", "1/4", "3/8", "1/2"];
 
-const STEP_CHARS = new Set(['.', 'x', 'X', 'o']);
-const ACCENT_CHARS = new Set(['.', 'L', 'M', 'S']);
-const PROB_CHARS = new Set(['.', '1', '2', '3', '4']);
+const STEP_CHARS = new Set([".", "x", "X", "o"]);
+const ACCENT_CHARS = new Set([".", "L", "M", "S"]);
+const PROB_CHARS = new Set([".", "1", "2", "3", "4"]);
 
 const VEL_FROM_STEP = { x: 1, X: 2, o: 0 };
 const VEL_FROM_ACCENT = { L: 2, M: 1, S: 0 };
-const PROB_FROM_CHAR = { '1': 25, '2': 50, '3': 75, '4': 100 };
-const PROB_TO_CHAR = { 100: '4', 75: '3', 50: '2', 25: '1' };
+const PROB_FROM_CHAR = { 1: 25, 2: 50, 3: 75, 4: 100 };
+const PROB_TO_CHAR = { 100: "4", 75: "3", 50: "2", 25: "1" };
 
 // v1 → v2 row key migration (six fixed → slots 1–6)
-const V1_ROW_TO_SOUND = { kick: 'kick', snare: 'snare', chat: 'chh', ohat: 'ohh', clap: 'clap', tom: 'tom' };
-const V1_ROW_ORDER = ['kick', 'snare', 'chat', 'ohat', 'clap', 'tom']; // slot order for v1 import
+const V1_ROW_TO_SOUND = {
+  kick: "kick",
+  snare: "snare",
+  chat: "chh",
+  ohat: "ohh",
+  clap: "clap",
+  tom: "tom",
+};
+const V1_ROW_ORDER = ["kick", "snare", "chat", "ohat", "clap", "tom"]; // slot order for v1 import
 
 // ---------- defaults ----------
 const EMPTY_CELL = () => ({ on: false, velocity: 1, probability: 100 });
@@ -38,7 +56,10 @@ function emptySlotInternal(sound = null) {
     reverbSend: 0,
     delaySend: 0,
   };
-  if (sound && isPitched(sound)) { s.defaultNote = defaultNote(sound); s.glide = false; }
+  if (sound && isPitched(sound)) {
+    s.defaultNote = defaultNote(sound);
+    s.glide = false;
+  }
   if (sound && hasFilter(sound)) s.filter = defaultFilter(sound);
   if (sound && hasChord(sound)) s.chordType = defaultChord(sound);
   const tv = sound ? tunableValues(sound) : null;
@@ -46,7 +67,11 @@ function emptySlotInternal(sound = null) {
   return s;
 }
 function emptyBankInternal() {
-  return { slots: Array.from({ length: SLOT_COUNT }, () => emptySlotInternal(null)), swing: 0, reverbAmount: 0.25 };
+  return {
+    slots: Array.from({ length: SLOT_COUNT }, () => emptySlotInternal(null)),
+    swing: 0,
+    reverbAmount: 0.25,
+  };
 }
 
 function bankIsEmpty(b) {
@@ -54,7 +79,7 @@ function bankIsEmpty(b) {
   // Empty = no active steps in any slot, default mix everywhere, no sound override params
   for (const s of b.slots) {
     if (!s) continue;
-    if (s.pattern.some(c => c.on)) return false;
+    if (s.pattern.some((c) => c.on)) return false;
     if (s.volume !== 0.85) return false;
     if (s.mute) return false;
     if (s.reverbSend !== 0) return false;
@@ -65,24 +90,39 @@ function bankIsEmpty(b) {
 }
 
 // ---------- helpers ----------
-function isFiniteNumber(x) { return typeof x === 'number' && Number.isFinite(x); }
-function inRange(x, lo, hi) { return isFiniteNumber(x) && x >= lo && x <= hi; }
-function round3(x) { return Math.round(x * 1000) / 1000; }
+function isFiniteNumber(x) {
+  return typeof x === "number" && Number.isFinite(x);
+}
+function inRange(x, lo, hi) {
+  return isFiniteNumber(x) && x >= lo && x <= hi;
+}
+function round3(x) {
+  return Math.round(x * 1000) / 1000;
+}
 
 function levenshtein(a, b) {
-  const m = a.length, n = b.length;
+  const m = a.length,
+    n = b.length;
   const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
   for (let i = 0; i <= m; i++) dp[i][0] = i;
   for (let j = 0; j <= n; j++) dp[0][j] = j;
-  for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++)
-    dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] : 1 + Math.min(dp[i - 1][j - 1], dp[i - 1][j], dp[i][j - 1]);
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] =
+        a[i - 1] === b[j - 1]
+          ? dp[i - 1][j - 1]
+          : 1 + Math.min(dp[i - 1][j - 1], dp[i - 1][j], dp[i][j - 1]);
   return dp[m][n];
 }
 function suggest(key, valid) {
-  let best = null, bestD = Infinity;
+  let best = null,
+    bestD = Infinity;
   for (const v of valid) {
     const d = levenshtein(String(key).toLowerCase(), v);
-    if (d < bestD) { bestD = d; best = v; }
+    if (d < bestD) {
+      bestD = d;
+      best = v;
+    }
   }
   return bestD <= 3 ? best : null;
 }
@@ -93,90 +133,176 @@ export function parsePattern(json) {
   const warnings = [];
 
   let obj;
-  if (typeof json === 'string') {
-    try { obj = JSON.parse(json); }
-    catch (e) { return { ok: false, errors: [{ path: '', message: `JSON parse error: ${e.message}` }], warnings: [] }; }
-  } else { obj = json; }
+  if (typeof json === "string") {
+    try {
+      obj = JSON.parse(json);
+    } catch (e) {
+      return {
+        ok: false,
+        errors: [{ path: "", message: `JSON parse error: ${e.message}` }],
+        warnings: [],
+      };
+    }
+  } else {
+    obj = json;
+  }
 
-  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
-    return { ok: false, errors: [{ path: '', message: 'Expected a JSON object at the top level.' }], warnings: [] };
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
+    return {
+      ok: false,
+      errors: [
+        { path: "", message: "Expected a JSON object at the top level." },
+      ],
+      warnings: [],
+    };
   }
 
   // version — accept 1 (migrate), 2 (no kit field), or 3 (current)
-  if (!('version' in obj)) {
-    errors.push({ path: 'version', message: 'Missing required "version" field. Expected 3 (or 1/2 to be migrated).' });
+  if (!("version" in obj)) {
+    errors.push({
+      path: "version",
+      message:
+        'Missing required "version" field. Expected 3 (or 1/2 to be migrated).',
+    });
   } else if (obj.version === 1) {
     return parseV1ThenMigrate(obj);
   } else if (obj.version !== 2 && obj.version !== 3) {
     if (isFiniteNumber(obj.version) && obj.version > 3) {
-      return { ok: false, errors: [{ path: 'version', message: `This file uses schema version ${obj.version}; this app supports version 3.` }], warnings: [] };
+      return {
+        ok: false,
+        errors: [
+          {
+            path: "version",
+            message: `This file uses schema version ${obj.version}; this app supports version 3.`,
+          },
+        ],
+        warnings: [],
+      };
     }
-    errors.push({ path: 'version', message: 'version must equal 3 (or 1/2 for migration).' });
+    errors.push({
+      path: "version",
+      message: "version must equal 3 (or 1/2 for migration).",
+    });
   }
 
-  const name = (typeof obj.name === 'string' && obj.name.trim()) ? obj.name.trim() : 'untitled';
+  const name =
+    typeof obj.name === "string" && obj.name.trim()
+      ? obj.name.trim()
+      : "untitled";
 
-  if (!('bpm' in obj)) errors.push({ path: 'bpm', message: 'Missing required "bpm".' });
-  else if (!inRange(obj.bpm, 60, 180)) errors.push({ path: 'bpm', message: 'bpm must be a number between 60 and 180.' });
+  if (!("bpm" in obj))
+    errors.push({ path: "bpm", message: 'Missing required "bpm".' });
+  else if (!inRange(obj.bpm, 60, 180))
+    errors.push({
+      path: "bpm",
+      message: "bpm must be a number between 60 and 180.",
+    });
 
-  if (!('swing' in obj)) errors.push({ path: 'swing', message: 'Missing required "swing".' });
-  else if (!inRange(obj.swing, 0, 0.66)) errors.push({ path: 'swing', message: 'swing must be a number between 0 and 0.66.' });
+  if (!("swing" in obj))
+    errors.push({ path: "swing", message: 'Missing required "swing".' });
+  else if (!inRange(obj.swing, 0, 0.66))
+    errors.push({
+      path: "swing",
+      message: "swing must be a number between 0 and 0.66.",
+    });
 
-  if (!obj.sends || typeof obj.sends !== 'object' || Array.isArray(obj.sends)) {
-    errors.push({ path: 'sends', message: 'Missing required "sends" object.' });
+  if (!obj.sends || typeof obj.sends !== "object" || Array.isArray(obj.sends)) {
+    errors.push({ path: "sends", message: 'Missing required "sends" object.' });
   } else {
     const r = obj.sends.reverb;
-    if (!r || typeof r !== 'object') errors.push({ path: 'sends.reverb', message: 'Missing "sends.reverb" object.' });
-    else if (!inRange(r.amount, 0, 1)) errors.push({ path: 'sends.reverb.amount', message: 'sends.reverb.amount must be 0–1.' });
+    if (!r || typeof r !== "object")
+      errors.push({
+        path: "sends.reverb",
+        message: 'Missing "sends.reverb" object.',
+      });
+    else if (!inRange(r.amount, 0, 1))
+      errors.push({
+        path: "sends.reverb.amount",
+        message: "sends.reverb.amount must be 0–1.",
+      });
 
     const d = obj.sends.delay;
-    if (!d || typeof d !== 'object') errors.push({ path: 'sends.delay', message: 'Missing "sends.delay" object.' });
+    if (!d || typeof d !== "object")
+      errors.push({
+        path: "sends.delay",
+        message: 'Missing "sends.delay" object.',
+      });
     else {
-      if (!DELAY_OPTIONS.includes(d.time)) errors.push({ path: 'sends.delay.time', message: `sends.delay.time must be one of ${DELAY_OPTIONS.map(v => `"${v}"`).join(', ')}.` });
-      if (!inRange(d.feedback, 0, 1)) errors.push({ path: 'sends.delay.feedback', message: 'sends.delay.feedback must be 0–1.' });
+      if (!DELAY_OPTIONS.includes(d.time))
+        errors.push({
+          path: "sends.delay.time",
+          message: `sends.delay.time must be one of ${DELAY_OPTIONS.map((v) => `"${v}"`).join(", ")}.`,
+        });
+      if (!inRange(d.feedback, 0, 1))
+        errors.push({
+          path: "sends.delay.feedback",
+          message: "sends.delay.feedback must be 0–1.",
+        });
     }
   }
 
   // banks
   const banks = [null, null, null, null];
   const bankExplicitlyNull = [false, false, false, false];
-  if (!obj.banks || typeof obj.banks !== 'object' || Array.isArray(obj.banks)) {
-    errors.push({ path: 'banks', message: 'Missing required "banks" object.' });
+  if (!obj.banks || typeof obj.banks !== "object" || Array.isArray(obj.banks)) {
+    errors.push({ path: "banks", message: 'Missing required "banks" object.' });
   } else {
     for (let i = 0; i < 4; i++) {
       const L = BANK_LETTERS[i];
       if (!(L in obj.banks)) {
-        errors.push({ path: `banks.${L}`, message: `Missing "banks.${L}". Use null for empty banks.` });
+        errors.push({
+          path: `banks.${L}`,
+          message: `Missing "banks.${L}". Use null for empty banks.`,
+        });
         continue;
       }
       const bv = obj.banks[L];
-      if (bv === null) { bankExplicitlyNull[i] = true; continue; }
-      if (typeof bv !== 'object' || Array.isArray(bv)) {
-        errors.push({ path: `banks.${L}`, message: `banks.${L} must be an object or null.` });
+      if (bv === null) {
+        bankExplicitlyNull[i] = true;
+        continue;
+      }
+      if (typeof bv !== "object" || Array.isArray(bv)) {
+        errors.push({
+          path: `banks.${L}`,
+          message: `banks.${L} must be an object or null.`,
+        });
         continue;
       }
       banks[i] = parseBank(bv, `banks.${L}`, errors, warnings);
     }
     for (const k of Object.keys(obj.banks)) {
-      if (!BANK_LETTERS.includes(k)) warnings.push({ path: `banks.${k}`, message: `Unknown bank "${k}" — ignored.` });
+      if (!BANK_LETTERS.includes(k))
+        warnings.push({
+          path: `banks.${k}`,
+          message: `Unknown bank "${k}" — ignored.`,
+        });
     }
   }
 
   // chain
   const chainIdx = [];
   if (!Array.isArray(obj.chain)) {
-    errors.push({ path: 'chain', message: 'chain must be an array.' });
+    errors.push({ path: "chain", message: "chain must be an array." });
   } else if (obj.chain.length < 1 || obj.chain.length > 8) {
-    errors.push({ path: 'chain', message: `chain must have 1–8 entries (got ${obj.chain.length}).` });
+    errors.push({
+      path: "chain",
+      message: `chain must have 1–8 entries (got ${obj.chain.length}).`,
+    });
   } else {
     obj.chain.forEach((c, i) => {
       const idx = BANK_LETTERS.indexOf(c);
       if (idx < 0) {
-        errors.push({ path: `chain[${i}]`, message: `chain[${i}] must be one of "A","B","C","D" (got ${JSON.stringify(c)}).` });
+        errors.push({
+          path: `chain[${i}]`,
+          message: `chain[${i}] must be one of "A","B","C","D" (got ${JSON.stringify(c)}).`,
+        });
         return;
       }
       if (bankExplicitlyNull[idx]) {
-        errors.push({ path: `chain[${i}]`, message: `chain[${i}] references bank "${c}", but banks.${c} is null.` });
+        errors.push({
+          path: `chain[${i}]`,
+          message: `chain[${i}] references bank "${c}", but banks.${c} is null.`,
+        });
         return;
       }
       chainIdx.push(idx);
@@ -185,29 +311,51 @@ export function parsePattern(json) {
 
   // Optional top-level "kit" string (v3+); v2 files just don't have it.
   let kitId = null;
-  if ('kit' in obj) {
+  if ("kit" in obj) {
     if (obj.kit === null) kitId = null;
-    else if (typeof obj.kit !== 'string') errors.push({ path: 'kit', message: 'kit must be a string id (e.g. "boom-bap") or null.' });
+    else if (typeof obj.kit !== "string")
+      errors.push({
+        path: "kit",
+        message: 'kit must be a string id (e.g. "boom-bap") or null.',
+      });
     else kitId = obj.kit;
   }
 
-  const KNOWN_TOP = new Set(['version', 'name', 'bpm', 'swing', 'sends', 'banks', 'chain', 'kit']);
-  for (const k of Object.keys(obj)) if (!KNOWN_TOP.has(k)) warnings.push({ path: k, message: `Unknown top-level key "${k}" — ignored.` });
+  const KNOWN_TOP = new Set([
+    "version",
+    "name",
+    "bpm",
+    "swing",
+    "sends",
+    "banks",
+    "chain",
+    "kit",
+  ]);
+  for (const k of Object.keys(obj))
+    if (!KNOWN_TOP.has(k))
+      warnings.push({
+        path: k,
+        message: `Unknown top-level key "${k}" — ignored.`,
+      });
 
   if (errors.length > 0) return { ok: false, errors, warnings };
 
   const sw = obj.swing;
   const rev = obj.sends.reverb.amount;
-  const normalizedBanks = banks.map(b => {
+  const normalizedBanks = banks.map((b) => {
     if (b === null) return emptyBankInternal();
     return { ...b, swing: Math.round(sw * 100), reverbAmount: rev };
   });
 
   return {
-    ok: true, errors: [], warnings,
+    ok: true,
+    errors: [],
+    warnings,
     value: {
-      name, bpm: obj.bpm,
-      swing: sw, reverbAmount: rev,
+      name,
+      bpm: obj.bpm,
+      swing: sw,
+      reverbAmount: rev,
       delayTime: obj.sends.delay.time,
       delayFeedback: obj.sends.delay.feedback,
       banks: normalizedBanks,
@@ -226,8 +374,11 @@ function parseV1ThenMigrate(v1) {
   // Reuse v1 row-shape validation but emit a v2 internal bank.
   function migrateV1Bank(bv, base) {
     const out = emptyBankInternal();
-    if (!bv.rows || typeof bv.rows !== 'object' || Array.isArray(bv.rows)) {
-      errors.push({ path: `${base}.rows`, message: `${base}.rows must be an object.` });
+    if (!bv.rows || typeof bv.rows !== "object" || Array.isArray(bv.rows)) {
+      errors.push({
+        path: `${base}.rows`,
+        message: `${base}.rows must be an object.`,
+      });
       return out;
     }
     // Place known v1 row keys into slots 1–6 (indices 0–5) in fixed order.
@@ -235,82 +386,150 @@ function parseV1ThenMigrate(v1) {
       const key = V1_ROW_ORDER[i];
       const v = bv.rows[key];
       if (!v) continue;
-      if (typeof v !== 'object' || Array.isArray(v)) {
-        errors.push({ path: `${base}.rows.${key}`, message: `must be an object.` });
+      if (typeof v !== "object" || Array.isArray(v)) {
+        errors.push({
+          path: `${base}.rows.${key}`,
+          message: `must be an object.`,
+        });
         continue;
       }
       const sound = V1_ROW_TO_SOUND[key];
       const slot = emptySlotInternal(sound);
-      if (inRange(v.volume, 0, 1)) slot.volume = v.volume; else errors.push({ path: `${base}.rows.${key}.volume`, message: `volume must be 0–1.` });
-      if (typeof v.mute === 'boolean') slot.mute = v.mute; else errors.push({ path: `${base}.rows.${key}.mute`, message: `mute must be boolean.` });
-      if (inRange(v.reverbSend, 0, 1)) slot.reverbSend = v.reverbSend; else errors.push({ path: `${base}.rows.${key}.reverbSend`, message: `reverbSend must be 0–1.` });
-      if (inRange(v.delaySend, 0, 1)) slot.delaySend = v.delaySend; else errors.push({ path: `${base}.rows.${key}.delaySend`, message: `delaySend must be 0–1.` });
+      if (inRange(v.volume, 0, 1)) slot.volume = v.volume;
+      else
+        errors.push({
+          path: `${base}.rows.${key}.volume`,
+          message: `volume must be 0–1.`,
+        });
+      if (typeof v.mute === "boolean") slot.mute = v.mute;
+      else
+        errors.push({
+          path: `${base}.rows.${key}.mute`,
+          message: `mute must be boolean.`,
+        });
+      if (inRange(v.reverbSend, 0, 1)) slot.reverbSend = v.reverbSend;
+      else
+        errors.push({
+          path: `${base}.rows.${key}.reverbSend`,
+          message: `reverbSend must be 0–1.`,
+        });
+      if (inRange(v.delaySend, 0, 1)) slot.delaySend = v.delaySend;
+      else
+        errors.push({
+          path: `${base}.rows.${key}.delaySend`,
+          message: `delaySend must be 0–1.`,
+        });
 
-      if (typeof v.steps !== 'string' || v.steps.length !== 16) {
-        errors.push({ path: `${base}.rows.${key}.steps`, message: `steps must be a 16-char string.` });
+      if (typeof v.steps !== "string" || v.steps.length !== 16) {
+        errors.push({
+          path: `${base}.rows.${key}.steps`,
+          message: `steps must be a 16-char string.`,
+        });
       } else {
         slot.pattern = parseSteps(v.steps, `${base}.rows.${key}.steps`, errors);
       }
       out.slots[i] = slot;
     }
     // accents / probability for v1
-    if ('accents' in bv && bv.accents && typeof bv.accents === 'object') {
+    if ("accents" in bv && bv.accents && typeof bv.accents === "object") {
       for (const [k, v] of Object.entries(bv.accents)) {
         const idx = V1_ROW_ORDER.indexOf(k);
         if (idx < 0) continue;
-        if (typeof v !== 'string' || v.length !== 16) continue;
+        if (typeof v !== "string" || v.length !== 16) continue;
         applyAccents(out.slots[idx].pattern, v);
       }
     }
-    if ('probability' in bv && bv.probability && typeof bv.probability === 'object') {
+    if (
+      "probability" in bv &&
+      bv.probability &&
+      typeof bv.probability === "object"
+    ) {
       for (const [k, v] of Object.entries(bv.probability)) {
         const idx = V1_ROW_ORDER.indexOf(k);
         if (idx < 0) continue;
-        if (typeof v !== 'string' || v.length !== 16) continue;
+        if (typeof v !== "string" || v.length !== 16) continue;
         applyProb(out.slots[idx].pattern, v);
       }
     }
-    warnings.push({ path: base, message: `migrated from v1 (slots 1–6 from row keys; 7–8 empty).` });
+    warnings.push({
+      path: base,
+      message: `migrated from v1 (slots 1–6 from row keys; 7–8 empty).`,
+    });
     return out;
   }
 
   // Walk v1 top-level (mirrors v2 parser but for v1's bank shape)
-  if (!inRange(v1.bpm, 60, 180)) errors.push({ path: 'bpm', message: 'bpm must be 60–180.' });
-  if (!inRange(v1.swing, 0, 0.66)) errors.push({ path: 'swing', message: 'swing must be 0–0.66.' });
-  if (!v1.sends?.reverb || !inRange(v1.sends.reverb.amount, 0, 1)) errors.push({ path: 'sends.reverb.amount', message: 'sends.reverb.amount must be 0–1.' });
-  if (!v1.sends?.delay || !DELAY_OPTIONS.includes(v1.sends.delay.time)) errors.push({ path: 'sends.delay.time', message: `sends.delay.time invalid.` });
-  if (!v1.sends?.delay || !inRange(v1.sends.delay.feedback, 0, 1)) errors.push({ path: 'sends.delay.feedback', message: 'sends.delay.feedback must be 0–1.' });
+  if (!inRange(v1.bpm, 60, 180))
+    errors.push({ path: "bpm", message: "bpm must be 60–180." });
+  if (!inRange(v1.swing, 0, 0.66))
+    errors.push({ path: "swing", message: "swing must be 0–0.66." });
+  if (!v1.sends?.reverb || !inRange(v1.sends.reverb.amount, 0, 1))
+    errors.push({
+      path: "sends.reverb.amount",
+      message: "sends.reverb.amount must be 0–1.",
+    });
+  if (!v1.sends?.delay || !DELAY_OPTIONS.includes(v1.sends.delay.time))
+    errors.push({
+      path: "sends.delay.time",
+      message: `sends.delay.time invalid.`,
+    });
+  if (!v1.sends?.delay || !inRange(v1.sends.delay.feedback, 0, 1))
+    errors.push({
+      path: "sends.delay.feedback",
+      message: "sends.delay.feedback must be 0–1.",
+    });
 
   const banks = [null, null, null, null];
   const bankNull = [false, false, false, false];
-  if (!v1.banks || typeof v1.banks !== 'object') errors.push({ path: 'banks', message: 'Missing "banks".' });
+  if (!v1.banks || typeof v1.banks !== "object")
+    errors.push({ path: "banks", message: 'Missing "banks".' });
   else {
     for (let i = 0; i < 4; i++) {
       const L = BANK_LETTERS[i];
       const bv = v1.banks[L];
-      if (bv == null) { bankNull[i] = bv === null; continue; }
+      if (bv == null) {
+        bankNull[i] = bv === null;
+        continue;
+      }
       banks[i] = migrateV1Bank(bv, `banks.${L}`);
     }
   }
   const chainIdx = [];
-  if (Array.isArray(v1.chain)) v1.chain.forEach((c, i) => {
-    const idx = BANK_LETTERS.indexOf(c);
-    if (idx < 0) errors.push({ path: `chain[${i}]`, message: `must be A/B/C/D.` });
-    else if (bankNull[idx]) errors.push({ path: `chain[${i}]`, message: `references null bank "${c}".` });
-    else chainIdx.push(idx);
-  });
+  if (Array.isArray(v1.chain))
+    v1.chain.forEach((c, i) => {
+      const idx = BANK_LETTERS.indexOf(c);
+      if (idx < 0)
+        errors.push({ path: `chain[${i}]`, message: `must be A/B/C/D.` });
+      else if (bankNull[idx])
+        errors.push({
+          path: `chain[${i}]`,
+          message: `references null bank "${c}".`,
+        });
+      else chainIdx.push(idx);
+    });
 
   if (errors.length > 0) return { ok: false, errors, warnings };
 
   const sw = v1.swing;
   const rev = v1.sends.reverb.amount;
-  const normalizedBanks = banks.map(b => b == null ? emptyBankInternal() : { ...b, swing: Math.round(sw * 100), reverbAmount: rev });
+  const normalizedBanks = banks.map((b) =>
+    b == null
+      ? emptyBankInternal()
+      : { ...b, swing: Math.round(sw * 100), reverbAmount: rev },
+  );
 
   return {
-    ok: true, errors: [], warnings,
+    ok: true,
+    errors: [],
+    warnings,
     value: {
-      name: (typeof v1.name === 'string' && v1.name.trim()) ? v1.name.trim() : 'untitled',
-      bpm: v1.bpm, swing: sw, reverbAmount: rev,
+      name:
+        typeof v1.name === "string" && v1.name.trim()
+          ? v1.name.trim()
+          : "untitled",
+      bpm: v1.bpm,
+      swing: sw,
+      reverbAmount: rev,
       delayTime: v1.sends.delay.time,
       delayFeedback: v1.sends.delay.feedback,
       banks: normalizedBanks,
@@ -325,9 +544,17 @@ function parseSteps(str, path, errors) {
   const cells = [];
   for (let i = 0; i < 16; i++) {
     const ch = str[i];
-    if (!STEP_CHARS.has(ch)) { errors.push({ path, message: `Invalid character "${ch}" at position ${i + 1}. Allowed: . x X o` }); cells.push(EMPTY_CELL()); continue; }
-    if (ch === '.') cells.push(EMPTY_CELL());
-    else cells.push({ on: true, velocity: VEL_FROM_STEP[ch], probability: 100 });
+    if (!STEP_CHARS.has(ch)) {
+      errors.push({
+        path,
+        message: `Invalid character "${ch}" at position ${i + 1}. Allowed: . x X o`,
+      });
+      cells.push(EMPTY_CELL());
+      continue;
+    }
+    if (ch === ".") cells.push(EMPTY_CELL());
+    else
+      cells.push({ on: true, velocity: VEL_FROM_STEP[ch], probability: 100 });
   }
   return cells;
 }
@@ -335,7 +562,7 @@ function applyAccents(pattern, str) {
   for (let i = 0; i < 16; i++) {
     const ch = str[i];
     if (!ACCENT_CHARS.has(ch)) continue;
-    if (ch === '.' || !pattern[i].on) continue;
+    if (ch === "." || !pattern[i].on) continue;
     pattern[i].velocity = VEL_FROM_ACCENT[ch];
   }
 }
@@ -343,7 +570,7 @@ function applyProb(pattern, str) {
   for (let i = 0; i < 16; i++) {
     const ch = str[i];
     if (!PROB_CHARS.has(ch)) continue;
-    if (ch === '.' || !pattern[i].on) continue;
+    if (ch === "." || !pattern[i].on) continue;
     pattern[i].probability = PROB_FROM_CHAR[ch];
   }
 }
@@ -351,69 +578,113 @@ function applyProb(pattern, str) {
 // ---------- v2 bank/slot parser ----------
 function parseBank(bv, base, errors, warnings) {
   const out = emptyBankInternal();
-  if (!bv.slots || typeof bv.slots !== 'object' || Array.isArray(bv.slots)) {
-    errors.push({ path: `${base}.slots`, message: `${base}.slots must be an object keyed by "1".."8".` });
+  if (!bv.slots || typeof bv.slots !== "object" || Array.isArray(bv.slots)) {
+    errors.push({
+      path: `${base}.slots`,
+      message: `${base}.slots must be an object keyed by "1".."8".`,
+    });
     return out;
   }
   for (const [k, v] of Object.entries(bv.slots)) {
     const idx = Number(k) - 1;
     if (!Number.isInteger(idx) || idx < 0 || idx >= SLOT_COUNT) {
-      errors.push({ path: `${base}.slots.${k}`, message: `Slot key "${k}" must be "1".."8".` });
+      errors.push({
+        path: `${base}.slots.${k}`,
+        message: `Slot key "${k}" must be "1".."8".`,
+      });
       continue;
     }
-    if (v === null) { out.slots[idx] = emptySlotInternal(null); continue; }
-    if (!v || typeof v !== 'object' || Array.isArray(v)) {
-      errors.push({ path: `${base}.slots.${k}`, message: `Slot must be an object or null.` });
+    if (v === null) {
+      out.slots[idx] = emptySlotInternal(null);
+      continue;
+    }
+    if (!v || typeof v !== "object" || Array.isArray(v)) {
+      errors.push({
+        path: `${base}.slots.${k}`,
+        message: `Slot must be an object or null.`,
+      });
       continue;
     }
     out.slots[idx] = parseSlot(v, `${base}.slots.${k}`, errors, warnings);
   }
-  const KNOWN_BANK = new Set(['slots']);
-  for (const k of Object.keys(bv)) if (!KNOWN_BANK.has(k)) warnings.push({ path: `${base}.${k}`, message: `Unknown key "${k}" — ignored.` });
+  const KNOWN_BANK = new Set(["slots"]);
+  for (const k of Object.keys(bv))
+    if (!KNOWN_BANK.has(k))
+      warnings.push({
+        path: `${base}.${k}`,
+        message: `Unknown key "${k}" — ignored.`,
+      });
   return out;
 }
 
 function parseSlot(v, base, errors, warnings) {
   // sound
-  if (!('sound' in v)) {
-    errors.push({ path: `${base}.sound`, message: `Missing "sound" (use null for unassigned).` });
+  if (!("sound" in v)) {
+    errors.push({
+      path: `${base}.sound`,
+      message: `Missing "sound" (use null for unassigned).`,
+    });
     return emptySlotInternal(null);
   }
   if (v.sound !== null && !SOUND_KEYS.includes(v.sound)) {
     const hint = suggest(v.sound, SOUND_KEYS);
-    errors.push({ path: `${base}.sound`, message: `Unknown sound "${v.sound}".${hint ? ` Did you mean "${hint}"?` : ''}` });
+    errors.push({
+      path: `${base}.sound`,
+      message: `Unknown sound "${v.sound}".${hint ? ` Did you mean "${hint}"?` : ""}`,
+    });
     return emptySlotInternal(null);
   }
   const slot = emptySlotInternal(v.sound);
   const path = (k) => `${base}.${k}`;
 
-  if (inRange(v.volume, 0, 1)) slot.volume = v.volume; else errors.push({ path: path('volume'), message: 'volume must be 0–1.' });
-  if (typeof v.mute === 'boolean') slot.mute = v.mute; else errors.push({ path: path('mute'), message: 'mute must be a boolean.' });
-  if (inRange(v.reverbSend, 0, 1)) slot.reverbSend = v.reverbSend; else errors.push({ path: path('reverbSend'), message: 'reverbSend must be 0–1.' });
-  if (inRange(v.delaySend, 0, 1)) slot.delaySend = v.delaySend; else errors.push({ path: path('delaySend'), message: 'delaySend must be 0–1.' });
+  if (inRange(v.volume, 0, 1)) slot.volume = v.volume;
+  else errors.push({ path: path("volume"), message: "volume must be 0–1." });
+  if (typeof v.mute === "boolean") slot.mute = v.mute;
+  else errors.push({ path: path("mute"), message: "mute must be a boolean." });
+  if (inRange(v.reverbSend, 0, 1)) slot.reverbSend = v.reverbSend;
+  else
+    errors.push({
+      path: path("reverbSend"),
+      message: "reverbSend must be 0–1.",
+    });
+  if (inRange(v.delaySend, 0, 1)) slot.delaySend = v.delaySend;
+  else
+    errors.push({ path: path("delaySend"), message: "delaySend must be 0–1." });
 
-  if (typeof v.steps !== 'string' || v.steps.length !== 16) {
-    errors.push({ path: path('steps'), message: 'steps must be a 16-char string.' });
+  if (typeof v.steps !== "string" || v.steps.length !== 16) {
+    errors.push({
+      path: path("steps"),
+      message: "steps must be a 16-char string.",
+    });
   } else {
-    slot.pattern = parseSteps(v.steps, path('steps'), errors);
+    slot.pattern = parseSteps(v.steps, path("steps"), errors);
   }
 
   // optional probability + accents
-  if (typeof v.accents === 'string' && v.accents.length === 16) applyAccents(slot.pattern, v.accents);
-  if (typeof v.probability === 'string' && v.probability.length === 16) applyProb(slot.pattern, v.probability);
+  if (typeof v.accents === "string" && v.accents.length === 16)
+    applyAccents(slot.pattern, v.accents);
+  if (typeof v.probability === "string" && v.probability.length === 16)
+    applyProb(slot.pattern, v.probability);
 
   // pitched-only fields
   if (v.sound !== null && isPitched(v.sound)) {
-    if (typeof v.glide === 'boolean') slot.glide = v.glide;
-    if ('notes' in v) {
+    if (typeof v.glide === "boolean") slot.glide = v.glide;
+    if ("notes" in v) {
       if (!Array.isArray(v.notes) || v.notes.length !== 16) {
-        errors.push({ path: path('notes'), message: 'notes must be a 16-element array of integers (semitone offsets from defaultNote).' });
+        errors.push({
+          path: path("notes"),
+          message:
+            "notes must be a 16-element array of integers (semitone offsets from defaultNote).",
+        });
       } else {
         for (let i = 0; i < 16; i++) {
           const off = v.notes[i];
           if (off == null) continue;
           if (!Number.isInteger(off) || off < -48 || off > 48) {
-            errors.push({ path: `${path('notes')}[${i}]`, message: `notes[${i}] must be an integer between -48 and 48.` });
+            errors.push({
+              path: `${path("notes")}[${i}]`,
+              message: `notes[${i}] must be an integer between -48 and 48.`,
+            });
             continue;
           }
           if (slot.pattern[i].on) slot.pattern[i].note = slot.defaultNote + off;
@@ -421,39 +692,83 @@ function parseSlot(v, base, errors, warnings) {
       }
     }
     // Ensure all active cells have a note (default if missing)
-    for (let i = 0; i < 16; i++) if (slot.pattern[i].on && slot.pattern[i].note == null) slot.pattern[i].note = slot.defaultNote;
+    for (let i = 0; i < 16; i++)
+      if (slot.pattern[i].on && slot.pattern[i].note == null)
+        slot.pattern[i].note = slot.defaultNote;
   }
 
   // filter
   if (v.sound !== null && hasFilter(v.sound) && v.filter) {
-    if (inRange(v.filter.cutoff, 0, 1)) slot.filter.cutoff = v.filter.cutoff; else errors.push({ path: path('filter.cutoff'), message: 'filter.cutoff must be 0–1.' });
-    if (inRange(v.filter.resonance, 0, 1)) slot.filter.resonance = v.filter.resonance; else errors.push({ path: path('filter.resonance'), message: 'filter.resonance must be 0–1.' });
+    if (inRange(v.filter.cutoff, 0, 1)) slot.filter.cutoff = v.filter.cutoff;
+    else
+      errors.push({
+        path: path("filter.cutoff"),
+        message: "filter.cutoff must be 0–1.",
+      });
+    if (inRange(v.filter.resonance, 0, 1))
+      slot.filter.resonance = v.filter.resonance;
+    else
+      errors.push({
+        path: path("filter.resonance"),
+        message: "filter.resonance must be 0–1.",
+      });
   }
 
   // chord
   if (v.sound !== null && hasChord(v.sound) && v.chordType) {
     if (CHORD_TYPES.includes(v.chordType)) slot.chordType = v.chordType;
-    else errors.push({ path: path('chordType'), message: `chordType must be one of ${CHORD_TYPES.join(', ')}.` });
+    else
+      errors.push({
+        path: path("chordType"),
+        message: `chordType must be one of ${CHORD_TYPES.join(", ")}.`,
+      });
   }
 
   // tunable (e.g. conga low/mid/high)
   if (v.sound !== null && tunableValues(v.sound) && v.tunable) {
     const tv = tunableValues(v.sound);
     if (tv.includes(v.tunable)) slot.tunable = v.tunable;
-    else errors.push({ path: path('tunable'), message: `tunable must be one of ${tv.join(', ')}.` });
+    else
+      errors.push({
+        path: path("tunable"),
+        message: `tunable must be one of ${tv.join(", ")}.`,
+      });
   }
 
   // unknown slot keys
-  const KNOWN_SLOT = new Set(['sound', 'pitched', 'volume', 'mute', 'reverbSend', 'delaySend', 'steps', 'accents', 'probability', 'glide', 'notes', 'filter', 'chordType', 'tunable', 'defaultNote']);
-  for (const k of Object.keys(v)) if (!KNOWN_SLOT.has(k)) warnings.push({ path: path(k), message: `Unknown key "${k}" — ignored.` });
+  const KNOWN_SLOT = new Set([
+    "sound",
+    "pitched",
+    "volume",
+    "mute",
+    "reverbSend",
+    "delaySend",
+    "steps",
+    "accents",
+    "probability",
+    "glide",
+    "notes",
+    "filter",
+    "chordType",
+    "tunable",
+    "defaultNote",
+  ]);
+  for (const k of Object.keys(v))
+    if (!KNOWN_SLOT.has(k))
+      warnings.push({
+        path: path(k),
+        message: `Unknown key "${k}" — ignored.`,
+      });
 
   return slot;
 }
 
 // ---------- serializer ----------
 export function serializePattern(state) {
-  const { name, bpm, banks, chain, delayTime, delayFeedback, editBank, kit } = state;
-  const refBank = banks[editBank] ?? banks.find(b => !bankIsEmpty(b)) ?? banks[0];
+  const { name, bpm, banks, chain, delayTime, delayFeedback, editBank, kit } =
+    state;
+  const refBank =
+    banks[editBank] ?? banks.find((b) => !bankIsEmpty(b)) ?? banks[0];
   const swInt = refBank?.swing ?? 0;
   const rev = refBank?.reverbAmount ?? 0.25;
 
@@ -465,7 +780,7 @@ export function serializePattern(state) {
 
   const out = {
     version: 3,
-    name: (name && name.trim()) || 'untitled',
+    name: (name && name.trim()) || "untitled",
     bpm,
     swing: Math.round(swInt) / 100,
     sends: {
@@ -473,7 +788,7 @@ export function serializePattern(state) {
       delay: { time: delayTime, feedback: round3(delayFeedback) },
     },
     banks: banksObj,
-    chain: chain.map(i => BANK_LETTERS[i]),
+    chain: chain.map((i) => BANK_LETTERS[i]),
   };
   if (kit) out.kit = kit;
   return out;
@@ -499,13 +814,21 @@ function slotToJson(s) {
     delaySend: round3(s.delaySend),
   };
   // steps + probability strings
-  let steps = '', prob = '', hasProb = false;
+  let steps = "",
+    prob = "",
+    hasProb = false;
   for (let i = 0; i < 16; i++) {
     const c = s.pattern[i];
-    if (!c.on) { steps += '.'; prob += '.'; continue; }
-    steps += c.velocity === 2 ? 'X' : c.velocity === 0 ? 'o' : 'x';
-    if (c.probability !== 100) { prob += PROB_TO_CHAR[c.probability]; hasProb = true; }
-    else prob += '.';
+    if (!c.on) {
+      steps += ".";
+      prob += ".";
+      continue;
+    }
+    steps += c.velocity === 2 ? "X" : c.velocity === 0 ? "o" : "x";
+    if (c.probability !== 100) {
+      prob += PROB_TO_CHAR[c.probability];
+      hasProb = true;
+    } else prob += ".";
   }
   out.steps = steps;
   if (hasProb) out.probability = prob;
@@ -524,14 +847,18 @@ function slotToJson(s) {
     }
     if (anyNonZero) out.notes = notes;
   }
-  if (hasFilter(s.sound) && s.filter) out.filter = { cutoff: round3(s.filter.cutoff), resonance: round3(s.filter.resonance) };
+  if (hasFilter(s.sound) && s.filter)
+    out.filter = {
+      cutoff: round3(s.filter.cutoff),
+      resonance: round3(s.filter.resonance),
+    };
   if (hasChord(s.sound) && s.chordType) out.chordType = s.chordType;
   if (tunableValues(s.sound) && s.tunable) out.tunable = s.tunable;
   return out;
 }
 
 // ---------- AI prompt ----------
-export const AI_SYSTEM_PROMPT = `You are helping a user design a drum + bass + chord pattern for Pattern-16, a 16-step machine with 8 assignable slots per bank. Output a single JSON object matching the schema below. Output JSON only — no commentary, no markdown fences.
+export const AI_SYSTEM_PROMPT_V0 = `You are helping a user design a drum + bass + chord pattern for Pattern-16, a 16-step machine with 8 assignable slots per bank. Output a single JSON object matching the schema below. Output JSON only — no commentary, no markdown fences.
 
 SCHEMA (version 3)
 {
@@ -648,6 +975,260 @@ VOICE-SPECIFIC TIPS
 
 - Ghost notes (o) on snares and hats are what make patterns feel human.
 - Use multiple banks (A→B variation) when the user asks for movement.
+
+Now produce a pattern for this request:
+`;
+
+export const AI_SYSTEM_PROMPT = `You are an expert beat producer helping a user design a drum pattern for Pattern-16, a 16-step groovebox. Output a single JSON object matching the schema below. Output JSON only — no commentary, no markdown fences, no explanation before or after.
+
+# OUTPUT CONTRACT (READ THIS FIRST)
+
+Your output must be exactly one JSON object. The structure below is non-negotiable — field names, nesting, and types must match exactly. Musical content (which steps, which notes, what density) is yours to design; structure is not.
+
+Specifically:
+- Field names are literal. \`slots\` is not \`rows\`, \`tracks\`, \`voices\`, or \`parts\`. \`steps\` is not \`pattern\` or \`grid\`. \`notes\` is not \`pitches\` or \`melody\`. Use the exact names below.
+- Slot keys are the strings "1" through "8", in that order. They are strings, not numbers. They are not "slot1", "s1", or "kick".
+- All 8 slots must be present in every non-null bank, even if a slot is silent. A silent slot has "steps": "................" and is otherwise minimal — don't omit it.
+- Banks A, B, C, D must all be present. Unused banks are null (not {}, not omitted).
+- \`chain\` is always an array of strings, even for a single bank: ["A"], never "A".
+- Strings that must be exactly 16 characters (steps, accents, probability, notes) must be exactly 16 characters. Count them.
+
+If a field is optional and you're not using it, omit it. Don't include it with a placeholder value like "" or null — omission is the correct way to skip optional fields.
+
+# HOW TO APPROACH THIS
+
+Before generating, decide:
+1. Genre — pick one from the genre vocabulary below. If the user is vague, default to a genre that fits their description; don't blend genres in one pattern.
+2. BPM — use the genre's tight range, not a "safe middle."
+3. Key — if pitched slots are used, pick one (A minor and F minor are good defaults). All notes must be in this key.
+4. Density — how busy is this pattern? Match the genre and the user's vibe ("chill" = sparse, "energetic" = dense). Never max out density on every row.
+5. Roles — assign each slot a job. Two slots doing the same job is wasted slots.
+
+Generate the rhythm first (kick + snare), then the pulse (hats), then accents (open hat, clap, percussion), then bass last (so it can answer the kick). This order matters — don't generate slots independently.
+
+# CRITICAL RULES
+
+Density caps per slot (hits per 16 steps):
+- Kick: 2–6. Never 7+. A four-on-the-floor kick is exactly 4.
+- Snare/clap: 2–4. Almost always on beats 2 and 4 (steps 5 and 13). Never on beat 1.
+- Closed hat: 4–16, but if 16, use velocity variation (mix of x/o) — never 16 medium hits.
+- Open hat: 0–4. Use sparingly; it's an accent, not a pulse.
+- Clap: 0–2, and only if it adds character the snare doesn't.
+- Shaker/tambourine: 8 or 16 (steady), never irregular.
+- Percussion (rim, cowbell, conga, woodblock, djembe): 1–6 syncopated hits. These go between the kick and snare, not on top of them.
+- 808/bass: 2–8. Should mirror or answer the kick rhythm, not fight it.
+- Chord stab: 1–4. Almost always on offbeats.
+- Pad: 1 hit, on step 1. It sustains.
+- Riser: 0 or 1 hit, typically near the end of the bar (step 13–16) for transitions.
+- Vinyl-bed: 1 hit minimum (it's continuous; one hit turns it on).
+
+Cross-slot rules (the difference between a beat and noise):
+- Kick and 808 must agree. The 808 should hit on the same steps as the kick, or a subset of them, or one extra step. Never have the 808 playing while the kick is silent for more than one step in a row.
+- Snare and clap reinforce each other. Either the clap doubles the snare exactly (thickening it), or the clap replaces the snare on one of the backbeats. Never both rows playing different rhythms.
+- Hat layers complement. Open hat fills the gaps the closed hat leaves. If closed hat is on every step, open hat should be on 0–2 steps. If closed hat is sparse, open hat can be more active.
+- Shaker fills space. Steady 8ths or 16ths. Use it when the hats are sparse.
+- Percussion goes between. Rim, cowbell, conga hits should fall on steps the kick and snare don't. Their job is syncopation.
+- Pad sets the harmony. If a pad is present, the 808 and chord stab should be in the same key as the pad's chord.
+
+What never to do:
+- Never put a snare/clap on step 1.
+- Never put a kick on every step.
+- Never duplicate the snare pattern exactly with the clap.
+- Never generate an 808 line whose notes are "random" — pitches must be in the chosen key, and the first note must be the root.
+- Never put high probability variation on the kick or main snare; they should be deterministic. Probability is for hats and ghost notes.
+- Never set every step to medium velocity — flat dynamics is the #1 failure mode.
+- Never use medium swing (0.3–0.4); swing is either subtle (0–0.15), classic shuffle (0.55–0.6), or off. The middle range sounds wrong.
+
+Dynamics are mandatory, not optional:
+- Use \`o\` (soft) for ghost notes on hats between the main hits — this is what makes hats feel human.
+- Use \`X\` (loud) for accents on the snare backbeat and the strong kick downbeats.
+- A pattern with no \`o\` or \`X\` characters is a bad pattern. Fix it before output.
+
+# GENRE VOCABULARY
+
+Use the kit name in the \`kit\` field. Match BPM, density, and feel exactly.
+
+Boom-Bap (kit: "boom-bap", BPM 82–94, swing 0.55–0.6)
+- Kick: classic pattern is "x.......x.x.....". (1, the "and of 3"). Variant: "x..x..x.....x...".
+- Snare: "....x.......x..." (steps 5, 13). Use X for accents.
+- Closed hat: swung 8ths with ghost notes — "x.o.x.o.x.o.x.o." is the template. Mix x and o.
+- Open hat: rare, maybe step 7 or 15.
+- Ride: alternative to hats — "x...x...x...x..." if used.
+- 808/sub bass: 2–4 hits, mostly on the kick steps. Key: minor.
+
+Trap (kit: "trap", BPM 130–155, swing 0)
+- Kick: syncopated and sparse, e.g. "x.....x...x.x...". Avoid four-on-floor.
+- Snare/clap: dead on steps 5 and 13. Often clap doubles snare.
+- Closed hat: This is where trap lives. Use velocity and probability heavily: "x.X.x.x.X.x.xXxX" with some steps at 50–75% probability for rolls. Triplet bursts at step 13–16 are signature.
+- Open hat: 1–2 hits, often offbeat.
+- 808: glide on. 3–6 notes, mostly on kick steps. Key: F minor or D minor. Slide between notes via the glide setting.
+- Snap: replace or layer with snare.
+
+House (kit: "house", BPM 120–128, swing 0–0.1)
+- Kick: four-on-the-floor, exactly "x...x...x...x...". No deviation.
+- Clap: "....x.......x..." (steps 5, 13).
+- Closed hat: offbeats — "..x...x...x...x." (steps 3, 7, 11, 15).
+- Open hat: also offbeats, often layered with closed hat at lower velocity.
+- Shaker: continuous 16ths.
+- Chord stab: offbeats, steps 3, 7, 11, 15. Minor 7 chords typical.
+- Sub bass: on the kick steps, root note of the chord.
+
+Drill (kit: "drill", BPM 140–150, swing 0)
+- Kick: syncopated like trap but more aggressive: "x...x.....x...x.".
+- Snare: step 5 and 13, often pitched up. Use rim layered.
+- Closed hat: sparse, with rolls — "x.x...x.x.....xx".
+- 808: glide on, sliding between notes. Long notes. Key: minor, often C minor.
+- Crash: step 1 only, for impact.
+
+Lo-Fi (kit: "lo-fi", BPM 70–90, swing 0.55)
+- Kick: soft, sparse: "x.......x.......".
+- Snare: dusty, step 5 and 13, low velocity.
+- Closed hat: swung with lots of ghost notes — mostly o, occasional x.
+- Vinyl-bed: always on (one hit on step 1).
+- Chord stab: jazz chords (m7, maj7) on offbeats.
+- Pad: one hit on step 1, sustained.
+
+Acid House (kit: "acid-house", BPM 120–130, swing 0)
+- Kick: four-on-the-floor.
+- Clap: steps 5 and 13.
+- Closed hat: offbeats.
+- Acid bass: this is the lead. 6–10 notes, glide on, in A minor pentatonic. Notes wandering between root, 3rd, 5th, 7th. The pattern should feel snaking, not blocky.
+- Cowbell: 1–2 syncopated hits.
+
+Jungle/DnB (kit: "jungle-dnb", BPM 165–175, swing 0)
+- Kick: minimal, often just "x.......x......." or syncopated.
+- Snare: backbeat is critical — step 5 and 13, with extra ghost snares possible.
+- Closed hat: 16ths with variation.
+- Ride: alternative pulse, fast.
+- Reese bass: long sustained notes, 1–3 per bar, gliding. Key: minor.
+- Sub bass: anchor on root.
+
+Afrobeats (kit: "afrobeats", BPM 100–115, swing 0.05–0.15)
+- Kick: syncopated, e.g. "x..x..x...x.x...".
+- Snare: step 5 and 13.
+- Snap: layered with snare or replacing it.
+- Shaker: continuous 16ths.
+- Conga (high): 4–6 syncopated hits between the kick.
+- Djembe: 2–4 accent hits.
+- Chord stab: occasional, on offbeats.
+
+Ambient/Downtempo (kit: "ambient", BPM 60–80, swing 0)
+- Kick: very sparse, soft. Step 1 and 9 only.
+- Rim: sparse texture.
+- Shaker: 8ths or 16ths, soft.
+- Ride: occasional, mostly for color.
+- Vinyl-bed: on.
+- Pad: step 1, sustained, sets the harmony.
+- Sub bass: 1–2 long notes, root and fifth.
+- Pluck: 1–3 melodic notes in key.
+
+# PITCHED ROW GUIDANCE
+
+If using any bass or tonal slot:
+
+- Pick a key first. Default A minor unless the genre suggests otherwise (F minor for trap, C minor for drill, D minor for lo-fi).
+- All notes must be in the minor scale of that key (or minor pentatonic for bass lines). For A minor: A, B, C, D, E, F, G. Don't use notes outside the scale.
+- First note is the root. The first active step on a pitched slot should play the root note (A in A minor).
+- Bass note movement should be limited. A good 808 line uses 2–4 different notes across the bar, not 8 different ones. Bass walks, doesn't sprint.
+- The 808 rhythm answers the kick. If the kick is on steps 1, 7, 11, the 808 should be on steps 1, 7, 11 (matching), or 1, 7 (subset), or 1, 7, 11, 13 (one extra answer-note). Never a totally independent rhythm.
+- Chord stab note = root of the chord. The slot's chordType setting handles the rest. Don't try to voice chords in the notes field.
+- Glide on for 808 in trap and drill, off otherwise.
+
+# SCHEMA
+
+{
+  "version": 3,
+  "name": "<short descriptive name>",
+  "kit": "<kit name from genre vocabulary>",
+  "bpm": <number, within genre range>,
+  "swing": <number, within genre range>,
+  "sends": {
+    "reverb": { "amount": <0-1> },
+    "delay":  { "time": "1/8"|"1/4"|"3/8"|"1/2", "feedback": <0-1> }
+  },
+  "banks": {
+    "A": {
+      "slots": {
+        "1": { /* slot object, see below */ },
+        "2": { /* slot object */ },
+        "3": { /* slot object */ },
+        "4": { /* slot object */ },
+        "5": { /* slot object */ },
+        "6": { /* slot object */ },
+        "7": { /* slot object */ },
+        "8": { /* slot object */ }
+      },
+      "accents":     { "<slot key>": "<16 chars>" },
+      "probability": { "<slot key>": "<16 chars>" }
+    },
+    "B": null,
+    "C": null,
+    "D": null
+  },
+  "chain": ["A"]
+}
+
+Slot object shape:
+
+Required for every slot:
+{
+  "sound": "<palette key>",
+  "volume": <0-1>,
+  "mute": false,
+  "reverbSend": <0-1>,
+  "delaySend": <0-1>,
+  "steps": "<exactly 16 chars from . x X o>"
+}
+
+Add only for pitched slots (bass and tonal sounds):
+"pitched": true,
+"notes": "<exactly 16 chars in the notes encoding>",
+"glide": <true | false>
+
+Add only for chord-stab slots:
+"chordType": "minor" | "major" | "sus4" | "m7" | "maj7"
+
+Do not add pitched, notes, glide, or chordType to percussion slots. Do not add chordType to non-chord-stab pitched slots.
+
+# STEP DSL
+
+Each \`steps\` string is exactly 16 chars:
+- . off
+- x on, medium velocity (default)
+- X on, loud (accent)
+- o on, soft (ghost note)
+
+Optional \`accents\` override velocity: L=loud, M=medium, S=soft, .=no override.
+Optional \`probability\` per active step: 4=100%, 3=75%, 2=50%, 1=25%, .=default 100%.
+
+# SELF-CHECK BEFORE OUTPUT
+
+Run both structural and musical checks before outputting.
+
+Structural (failing any of these means the JSON will be rejected):
+- Top-level field is \`banks\`, not \`tracks\` or \`patterns\`.
+- Inside each non-null bank, the field is \`slots\`, not \`rows\`.
+- All 8 slots present in bank A, keyed "1" through "8" as strings.
+- Every steps string is exactly 16 characters — count them.
+- Every notes, accents, probability string is exactly 16 characters where present.
+- \`chain\` is an array, even with one entry.
+- Banks B, C, D are null if unused, not {} or omitted.
+- Pitched slots have pitched: true and notes. Percussion slots have neither.
+- No extra fields with invented names.
+
+Musical (these are the difference between valid-but-bad and actually good):
+- No snare/clap on step 1.
+- No kick on every step.
+- At least one o or X character somewhere (dynamics present).
+- If 808/bass present: all notes in the chosen key, first note is the root, rhythm subsets or matches the kick.
+- If two slots share a role (snare + clap), they reinforce rather than conflict.
+- BPM is in the genre's tight range.
+- Density per slot is within caps.
+- Swing is 0, 0.05–0.15, or 0.55–0.6 — not the bad-middle zone.
+
+If any structural check fails, the validator will reject the output and the user can't use it. If any musical check fails, the user will get a valid pattern that sounds bad. Both matter; structural matters first.
+
+# USER REQUEST
 
 Now produce a pattern for this request:
 `;
