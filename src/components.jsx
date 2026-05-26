@@ -181,7 +181,14 @@ function BPMControl({ bpm, setBpm }) {
 
 const VEL_LABEL = ['SOFT', 'MED', 'LOUD'];
 
-function Step({ cell, current, downbeat, onClick, onContextMenu, rowIndex, stepIndex }) {
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+function shortNote(midi) { return NOTE_NAMES[((midi % 12) + 12) % 12]; }
+function fullNote(midi) {
+  const m = Math.round(midi);
+  return `${NOTE_NAMES[((m % 12) + 12) % 12]}${Math.floor(m / 12) - 1}`;
+}
+
+function PercStep({ cell, current, downbeat, onClick, onContextMenu, rowIndex, stepIndex }) {
   const { on, velocity, probability } = cell;
   const cls = [
     'step',
@@ -194,15 +201,8 @@ function Step({ cell, current, downbeat, onClick, onContextMenu, rowIndex, stepI
   const title = on
     ? `Step ${stepIndex + 1} · ${VEL_LABEL[velocity]} · ${probability}%\nShift/right-click: velocity · Alt-click: probability`
     : `Step ${stepIndex + 1} · empty`;
-
   return (
-    <button
-      className={cls}
-      onClick={onClick}
-      onContextMenu={onContextMenu}
-      data-row={rowIndex}
-      title={title}
-    >
+    <button className={cls} onClick={onClick} onContextMenu={onContextMenu} data-row={rowIndex} title={title}>
       <span className="step-face">
         <span className="step-led" />
         {on && probability < 100 && (
@@ -215,4 +215,84 @@ function Step({ cell, current, downbeat, onClick, onContextMenu, rowIndex, stepI
   );
 }
 
-export { Splash, Knob, MiniSend, VolumeSlider, PlayButton, BPMControl, Step };
+// Pitched step: same visuals plus a note letter overlay; pointer-drag vertically
+// adjusts the cell's note in 10px-per-semitone steps. Clicks (no drag) bubble
+// through onClick as usual.
+function PitchedStep({ cell, current, downbeat, onClick, onContextMenu, onPitchDrag, rowIndex, stepIndex, defaultNote }) {
+  const { on, velocity, probability, note } = cell;
+  const draggedRef = useRef(null);
+  const lastDeltaRef = useRef(0);
+  const cls = [
+    'step', 'pitched',
+    on && 'on',
+    on && `v${velocity}`,
+    on && probability < 100 && 'prob',
+    current && 'current',
+    downbeat && 'downbeat',
+  ].filter(Boolean).join(' ');
+  const displayNote = on ? (note ?? defaultNote) : null;
+  const title = on
+    ? `Step ${stepIndex + 1} · ${fullNote(displayNote)} · ${VEL_LABEL[velocity]} · ${probability}%\nDrag ↕ for pitch · Cmd-click for picker · Shift: velocity · Alt: probability`
+    : `Step ${stepIndex + 1} · empty (note will default to ${fullNote(defaultNote)})`;
+
+  const handlePointerDown = (e) => {
+    if (!on) return;
+    if (e.button !== 0) return; // only left button
+    if (e.shiftKey || e.altKey || e.metaKey || e.ctrlKey) return;
+    draggedRef.current = { startY: e.clientY, startNote: note ?? defaultNote, dragged: false };
+    lastDeltaRef.current = 0;
+    const move = (ev) => {
+      const d = draggedRef.current;
+      if (!d) return;
+      const dy = d.startY - ev.clientY;
+      if (!d.dragged && Math.abs(dy) > 4) d.dragged = true;
+      if (d.dragged) {
+        const semis = Math.round(dy / 10);
+        if (semis !== lastDeltaRef.current) {
+          onPitchDrag?.(semis - lastDeltaRef.current);
+          lastDeltaRef.current = semis;
+        }
+      }
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  const handleClick = (e) => {
+    if (draggedRef.current?.dragged) {
+      draggedRef.current = null;
+      return; // swallow the click that ended a drag
+    }
+    draggedRef.current = null;
+    onClick?.(e);
+  };
+
+  return (
+    <button
+      className={cls}
+      onPointerDown={handlePointerDown}
+      onClick={handleClick}
+      onContextMenu={onContextMenu}
+      data-row={rowIndex}
+      title={title}
+    >
+      <span className="step-face">
+        <span className="step-led" />
+        {on && (
+          <span className="step-note" aria-hidden="true">{shortNote(displayNote)}</span>
+        )}
+        {on && probability < 100 && (
+          <span className="step-prob" aria-hidden="true">
+            <span className="step-prob-dot" data-p={probability} />
+          </span>
+        )}
+      </span>
+    </button>
+  );
+}
+
+export { Splash, Knob, MiniSend, VolumeSlider, PlayButton, BPMControl, PercStep, PitchedStep };

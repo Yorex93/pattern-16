@@ -1,117 +1,176 @@
 import { Fragment, useState, useEffect, useRef, useCallback } from 'react';
-import { DrumEngine, renderOffline, trimSilentTail, encodeWav } from './audio-engine.js';
-import { Splash, Knob, MiniSend, VolumeSlider, PlayButton, BPMControl, Step } from './components.jsx';
+import { DrumEngine, renderOffline, trimSilentTail, encodeWav, SLOT_COUNT } from './audio-engine.js';
+import { Splash, Knob, MiniSend, VolumeSlider, PlayButton, BPMControl, PitchedStep, PercStep } from './components.jsx';
 import { ImportJsonModal, ExportJsonModal } from './json-modals.jsx';
 import { AI_SYSTEM_PROMPT } from './json-io.js';
+import {
+  PALETTE, CATEGORIES, SOUND_KEYS, CHORD_TYPES,
+  isPitched, hasFilter, hasChord, tunableValues, defaultNote, defaultFilter, defaultChord,
+  DEFAULT_LOADOUT, noteLabel, shortNoteLabel,
+} from './sounds.js';
+import { PalettePopover, NotePicker, SlotSettingsPopover } from './slot-ui.jsx';
 
-const ROWS = [
-  { id: 'kick',  label: 'KICK' },
-  { id: 'snare', label: 'SNARE' },
-  { id: 'chh',   label: 'C-HAT' },
-  { id: 'ohh',   label: 'O-HAT' },
-  { id: 'clap',  label: 'CLAP' },
-  { id: 'tom',   label: 'TOM' },
-];
-const ROW_IDS = ROWS.map(r => r.id);
 const BANK_LETTERS = ['A', 'B', 'C', 'D'];
 const DELAY_OPTIONS = ['1/8', '1/4', '3/8', '1/2'];
+const SLOT_IDX = Array.from({ length: SLOT_COUNT }, (_, i) => i);
 
-// ----- Cell + bank helpers -----
+// ----- Cell helpers -----
 const emptyCell = () => ({ on: false, velocity: 1, probability: 100 });
 const onCell = (velocity = 1, probability = 100) => ({ on: true, velocity, probability });
 const EMPTY_ROW = () => Array.from({ length: 16 }, emptyCell);
-const EMPTY_PATTERN = () => Object.fromEntries(ROWS.map(r => [r.id, EMPTY_ROW()]));
 
-const ZERO_PER_ROW = () => Object.fromEntries(ROWS.map(r => [r.id, 0]));
-const DEFAULT_VOLUMES = () => Object.fromEntries(ROWS.map(r => [r.id, 0.85]));
-const DEFAULT_MUTES = () => Object.fromEntries(ROWS.map(r => [r.id, false]));
+// ----- Slot helpers -----
+function emptySlot(sound = null) {
+  const slot = {
+    sound,
+    pattern: EMPTY_ROW(),
+    volume: 0.85,
+    mute: false,
+    reverbSend: 0,
+    delaySend: 0,
+  };
+  if (sound) {
+    if (isPitched(sound)) {
+      slot.defaultNote = defaultNote(sound);
+      slot.glide = false;
+    }
+    if (hasFilter(sound)) slot.filter = defaultFilter(sound);
+    if (hasChord(sound)) slot.chordType = defaultChord(sound);
+    const tv = tunableValues(sound);
+    if (tv) slot.tunable = tv[Math.floor(tv.length / 2)] ?? tv[0];
+  }
+  return slot;
+}
 
-function emptyBank() {
+function emptyBank(loadout = DEFAULT_LOADOUT) {
   return {
-    pattern: EMPTY_PATTERN(),
-    volumes: DEFAULT_VOLUMES(),
-    mutes: DEFAULT_MUTES(),
-    reverbSends: ZERO_PER_ROW(),
-    delaySends: ZERO_PER_ROW(),
+    slots: loadout.slice(0, SLOT_COUNT).map(s => emptySlot(s)),
     swing: 0,
     reverbAmount: 0.25,
   };
 }
 
-// Preset row helper: '.' or 0 = off, number = on with velocity, [v,p] = on with vel+prob
-function row(spec) {
+// When the user changes a slot's sound, preserve pattern + mix but reset
+// sound-specific config (glide/chord/filter/tunable/defaultNote). Also normalize
+// note fields on active steps so they make sense for the new voice.
+function reassignSlotSound(slot, newSound) {
+  const next = {
+    ...slot,
+    sound: newSound,
+  };
+  // Strip sound-specific config; re-add as appropriate
+  delete next.defaultNote;
+  delete next.glide;
+  delete next.filter;
+  delete next.chordType;
+  delete next.tunable;
+  if (newSound) {
+    if (isPitched(newSound)) {
+      next.defaultNote = defaultNote(newSound);
+      next.glide = slot.glide ?? false;
+      // Initialize/normalize per-cell notes: keep existing notes if any, else default
+      next.pattern = slot.pattern.map(c => {
+        if (!c.on) return c;
+        return { ...c, note: c.note ?? next.defaultNote };
+      });
+    } else {
+      next.pattern = slot.pattern.map(c => {
+        if (!c.on) return c;
+        const { note, ...rest } = c;
+        return rest;
+      });
+    }
+    if (hasFilter(newSound)) next.filter = slot.filter ?? defaultFilter(newSound);
+    if (hasChord(newSound)) next.chordType = slot.chordType ?? defaultChord(newSound);
+    const tv = tunableValues(newSound);
+    if (tv) next.tunable = (tv.includes(slot.tunable) ? slot.tunable : tv[Math.floor(tv.length / 2)] ?? tv[0]);
+  }
+  return next;
+}
+
+// ----- Preset row helper. Spec: '.' or 0=off; n=on(vel=n); [v,p]=on; [v,p,off]=on with note offset (pitched). -----
+function row(spec, baseNote) {
   return spec.map(e => {
     if (e === '.' || e === 0) return emptyCell();
-    if (typeof e === 'number') return onCell(e, 100);
-    if (Array.isArray(e)) return onCell(e[0], e[1] ?? 100);
+    if (typeof e === 'number') {
+      const c = onCell(e, 100);
+      if (baseNote != null) c.note = baseNote;
+      return c;
+    }
+    if (Array.isArray(e)) {
+      const c = onCell(e[0], e[1] ?? 100);
+      if (baseNote != null) c.note = baseNote + (e[2] ?? 0);
+      return c;
+    }
     return emptyCell();
   });
 }
 
+// Build a slot from a sound + pattern + overrides
+function makeSlot(sound, pattern, overrides = {}) {
+  const base = emptySlot(sound);
+  return {
+    ...base,
+    pattern,
+    ...overrides,
+  };
+}
+
+// ----- Presets -----
 const PRESETS = {
-  'BOOM-BAP': {
-    pattern: {
-      kick:  row([2,'.','.','.', '.','.',1,'.', 1,'.','.','.', '.','.','.','.']),
-      snare: row(['.','.','.','.', 2,'.','.','.', '.','.','.','.', 2,'.','.','.']),
-      chh:   row([1,'.',1,'.', 1,'.',1,'.', 1,'.',1,'.', 1,'.',1,'.']),
-      ohh:   row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.',1,'.']),
-      clap:  EMPTY_ROW(),
-      tom:   EMPTY_ROW(),
-    },
-    bpm: 88,
-    swing: 56,
-    reverbAmount: 0.32,
-    reverbSends: { kick: 0,    snare: 0.45, chh: 0.1, ohh: 0.25, clap: 0, tom: 0.15 },
-    delaySends: ZERO_PER_ROW(),
+  'BOOM-BAP': () => {
+    const slots = [
+      makeSlot('kick',   row([2,'.','.','.', '.','.',1,'.', 1,'.','.','.', '.','.','.','.'])),
+      makeSlot('snare',  row(['.','.','.','.', 2,'.','.','.', '.','.','.','.', 2,'.','.','.']), { reverbSend: 0.45 }),
+      makeSlot('chh',    row([1,'.',1,'.', 1,'.',1,'.', 1,'.',1,'.', 1,'.',1,'.']),  { reverbSend: 0.1 }),
+      makeSlot('ohh',    row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.',1,'.']), { reverbSend: 0.25 }),
+      makeSlot('rim',    row(['.','.',[1,75],'.', '.','.','.','.', '.','.',[1,75],'.', '.','.','.','.'])),
+      makeSlot('ride',   row([1,'.','.','.', 1,'.','.','.', 1,'.','.','.', 1,'.','.','.']), { reverbSend: 0.2 }),
+      makeSlot('shaker', row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.'])),
+      makeSlot('808',    row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.'], 36)),
+    ];
+    return { slots, swing: 56, reverbAmount: 0.32 };
   },
-  'TRAP': {
-    pattern: {
-      kick:  row([2,'.','.','.', '.','.',1,'.', '.','.',1,'.', '.','.','.','.']),
-      snare: row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']),
-      chh:   row([1,[1,75],1,[1,50], 1,[1,75],1,[1,75], 1,[1,50],1,[1,75], 1,[1,75],[1,50],[1,75]]),
-      ohh:   row(['.','.','.','.', '.','.','.','.', '.','.',1,'.', '.','.','.','.']),
-      clap:  row(['.','.','.','.', 2,'.','.','.', '.','.','.','.', 2,'.','.','.']),
-      tom:   row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.',1,'.']),
-    },
-    bpm: 140,
-    swing: 0,
-    reverbAmount: 0.22,
-    reverbSends: { kick: 0, snare: 0.15, chh: 0, ohh: 0.2, clap: 0.2, tom: 0.25 },
-    delaySends: { kick: 0, snare: 0, chh: 0, ohh: 0.55, clap: 0, tom: 0.2 },
+
+  'TRAP': () => {
+    const N = 36;
+    const slots = [
+      makeSlot('kick',   row([2,'.','.','.', '.','.',1,'.', '.','.',1,'.', '.','.','.','.'])),
+      makeSlot('snare',  row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']), { reverbSend: 0.15 }),
+      makeSlot('chh',    row([1,[1,75],1,[1,50], 1,[1,75],1,[1,75], 1,[1,50],1,[1,75], 1,[1,75],[1,50],[1,75]])),
+      makeSlot('ohh',    row(['.','.','.','.', '.','.','.','.', '.','.',1,'.', '.','.','.','.']), { delaySend: 0.55, reverbSend: 0.2 }),
+      makeSlot('clap',   row(['.','.','.','.', 2,'.','.','.', '.','.','.','.', 2,'.','.','.']), { reverbSend: 0.2 }),
+      makeSlot('tom',    row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.',1,'.']), { reverbSend: 0.25, delaySend: 0.2 }),
+      makeSlot('shaker', row(['.',1,'.',1, '.',1,'.',1, '.',1,'.',1, '.',1,'.',1])),
+      makeSlot('808',    row([2,'.','.','.', '.','.',[1,100,3],'.', '.','.',[1,100,5],'.', '.','.','.','.'], N), { glide: true }),
+    ];
+    return { slots, swing: 0, reverbAmount: 0.22 };
   },
-  'HOUSE': {
-    pattern: {
-      kick:  row([2,'.','.','.', 1,'.','.','.', 1,'.','.','.', 1,'.','.','.']),
-      snare: EMPTY_ROW(),
-      chh:   row(['.','.',1,'.', '.','.',1,'.', '.','.',1,'.', '.','.',1,'.']),
-      ohh:   row(['.','.','.','.', '.','.',1,'.', '.','.','.','.', '.','.',1,'.']),
-      clap:  row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 2,'.','.','.']),
-      tom:   EMPTY_ROW(),
-    },
-    bpm: 124,
-    swing: 0,
-    reverbAmount: 0.20,
-    reverbSends: { kick: 0, snare: 0, chh: 0.1, ohh: 0.2, clap: 0.4, tom: 0 },
-    delaySends: { kick: 0, snare: 0, chh: 0, ohh: 0, clap: 0.3, tom: 0 },
+
+  'HOUSE': () => {
+    const slots = [
+      makeSlot('kick',       row([2,'.','.','.', 1,'.','.','.', 1,'.','.','.', 1,'.','.','.'])),
+      makeSlot('clap',       row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 2,'.','.','.']), { reverbSend: 0.4 }),
+      makeSlot('chh',        row(['.','.',1,'.', '.','.',1,'.', '.','.',1,'.', '.','.',1,'.']), { reverbSend: 0.1 }),
+      makeSlot('ohh',        row(['.','.','.','.', '.','.',1,'.', '.','.','.','.', '.','.',1,'.']), { reverbSend: 0.2 }),
+      makeSlot('shaker',     row([1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1])),
+      makeSlot('tambourine', row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']), { reverbSend: 0.3 }),
+      makeSlot('chord-stab', row(['.','.','.','.', '.','.',1,'.', '.','.','.','.', '.','.',1,'.'], 48), { chordType: 'minor', reverbSend: 0.3 }),
+      makeSlot('sub-bass',   row([1,'.','.','.', '.','.','.','.', 1,'.','.','.', '.','.','.','.'], 36)),
+    ];
+    return { slots, swing: 0, reverbAmount: 0.20 };
   },
 };
 
 function bankFromPreset(name) {
-  const p = PRESETS[name];
-  if (!p) return emptyBank();
-  return {
-    pattern: Object.fromEntries(Object.entries(p.pattern).map(([k, v]) => [k, v.map(c => ({ ...c }))])),
-    volumes: DEFAULT_VOLUMES(),
-    mutes: DEFAULT_MUTES(),
-    reverbSends: { ...ZERO_PER_ROW(), ...(p.reverbSends || {}) },
-    delaySends: { ...ZERO_PER_ROW(), ...(p.delaySends || {}) },
-    swing: p.swing ?? 0,
-    reverbAmount: p.reverbAmount ?? 0.25,
-  };
+  const fn = PRESETS[name];
+  if (!fn) return emptyBank();
+  const { slots, swing, reverbAmount } = fn();
+  return { slots, swing, reverbAmount };
 }
 
 // ============================================================
-// Sub-components specific to this app
+// Sub-components
 // ============================================================
 
 function BankBar({ banks, editBank, playingBank, isPlaying, onSelect }) {
@@ -122,7 +181,7 @@ function BankBar({ banks, editBank, playingBank, isPlaying, onSelect }) {
         {BANK_LETTERS.map((letter, i) => {
           const isEditing = i === editBank;
           const isPlayingHere = isPlaying && i === playingBank;
-          const populated = Object.values(banks[i].pattern).some(r => r.some(c => c.on));
+          const populated = banks[i].slots.some(s => s.pattern.some(c => c.on));
           return (
             <button
               key={letter}
@@ -142,9 +201,8 @@ function BankBar({ banks, editBank, playingBank, isPlaying, onSelect }) {
 
 function ChainEditor({ chain, setChain, playingChainIdx, isPlaying }) {
   const cycleCell = (idx) => {
-    if (idx > chain.length) return; // can't reach past the next-empty slot
+    if (idx > chain.length) return;
     if (idx === chain.length) {
-      // The "+" add slot — append a default A
       if (chain.length >= 8) return;
       setChain([...chain, 0]);
       return;
@@ -152,13 +210,11 @@ function ChainEditor({ chain, setChain, playingChainIdx, isPlaying }) {
     const cur = chain[idx];
     const isLast = idx === chain.length - 1;
     if (cur >= 3) {
-      // Past D: last slot removes, middle slot wraps to A (no holes allowed)
       if (isLast && idx > 0) { setChain(chain.slice(0, idx)); return; }
       const nc = [...chain]; nc[idx] = 0; setChain(nc); return;
     }
     const nc = [...chain]; nc[idx] = cur + 1; setChain(nc);
   };
-
   return (
     <div className="chain">
       <div className="band-label">CHAIN <span className="band-sub">{chain.length} {chain.length === 1 ? 'BAR' : 'BARS'}</span></div>
@@ -175,13 +231,6 @@ function ChainEditor({ chain, setChain, playingChainIdx, isPlaying }) {
               className={`chain-cell ${!inChain ? 'empty' : ''} ${active ? 'active' : ''} ${isPad ? 'pad' : ''} ${isAddSlot ? 'add' : ''}`}
               onClick={() => cycleCell(i)}
               disabled={isPad}
-              title={
-                inChain
-                  ? `Slot ${i + 1}: bank ${BANK_LETTERS[v]} — click to cycle${i === chain.length - 1 ? ' (D → remove)' : ''}`
-                  : isAddSlot
-                    ? `Slot ${i + 1}: empty — click to add`
-                    : 'Locked — extend the chain first'
-              }
             >
               {inChain && <span className="chain-letter">{BANK_LETTERS[v]}</span>}
               {isAddSlot && <span className="chain-add">+</span>}
@@ -201,59 +250,48 @@ function SendsPanel({ swing, setSwing, reverbAmount, setReverbAmount, delayFeedb
         <span className="sends-title">MODULATION</span>
         <div className="delay-time">
           {DELAY_OPTIONS.map(opt => (
-            <button
-              key={opt}
-              className={`dt-opt ${delayTime === opt ? 'on' : ''}`}
-              onClick={() => setDelayTime(opt)}
-              title={`Delay time ${opt} note`}
-            >{opt}</button>
+            <button key={opt} className={`dt-opt ${delayTime === opt ? 'on' : ''}`} onClick={() => setDelayTime(opt)}>{opt}</button>
           ))}
         </div>
       </div>
       <div className="sends-knobs">
-        <Knob
-          value={swing}
-          onChange={setSwing}
-          min={0}
-          max={66}
-          label="SWING"
-          size={52}
-          displayValue={`${Math.round(swing)}`}
-        />
+        <Knob value={swing} onChange={setSwing} min={0} max={66} label="SWING" size={52} displayValue={`${Math.round(swing)}`} />
         <Knob value={reverbAmount} onChange={setReverbAmount} label="REVERB" size={52} />
-        <Knob
-          value={delayFeedback}
-          onChange={setDelayFeedback}
-          min={0}
-          max={0.8}
-          label="DELAY FB"
-          size={52}
-          displayValue={Math.round(delayFeedback * 100)}
-        />
+        <Knob value={delayFeedback} onChange={setDelayFeedback} min={0} max={0.8} label="DELAY FB" size={52} displayValue={Math.round(delayFeedback * 100)} />
       </div>
     </div>
   );
 }
 
-function SampleSlot({ rowId, label, sample, onLoad, onClear, dragOver, setDragOver }) {
+// Slot label is now a clickable button that opens the palette popover, plus
+// retains the sample-upload drop target behavior.
+function SlotLabel({ slotIdx, slot, sample, onLoad, onClear, onOpenPalette, dragOver, setDragOver }) {
   const fileRef = useRef(null);
   const handleFile = async (file) => {
     if (!file) return;
     await onLoad(file);
   };
+  const meta = slot.sound ? PALETTE[slot.sound] : null;
+  const label = sample ? sample.name.replace(/\.[^.]+$/, '').slice(0, 10) : (meta?.short ?? '—');
+
   return (
     <div
       className={`row-name ${dragOver ? 'drag' : ''} ${sample ? 'has-sample' : ''}`}
-      onDragOver={(e) => { e.preventDefault(); setDragOver(rowId); }}
+      onDragOver={(e) => { e.preventDefault(); setDragOver(slotIdx); }}
       onDragLeave={() => setDragOver(null)}
       onDrop={(e) => {
         e.preventDefault();
         setDragOver(null);
-        const f = e.dataTransfer.files?.[0];
-        handleFile(f);
+        handleFile(e.dataTransfer.files?.[0]);
       }}
-      onClick={() => fileRef.current?.click()}
-      title={sample ? `${sample.name} — click to replace, × to revert to synth` : `${label} — drop a .wav/.mp3 or click to upload`}
+      onClick={(e) => {
+        // Cmd/Ctrl-click → upload sample. Plain click → open palette popover.
+        if (e.metaKey || e.ctrlKey) { fileRef.current?.click(); return; }
+        onOpenPalette(slotIdx, e.currentTarget);
+      }}
+      title={sample
+        ? `${sample.name} — Cmd/Ctrl-click to replace, × to revert`
+        : `${meta?.name ?? 'EMPTY'} — click to change sound · Cmd/Ctrl-click to upload sample · or drop audio`}
     >
       <input
         ref={fileRef}
@@ -268,18 +306,14 @@ function SampleSlot({ rowId, label, sample, onLoad, onClear, dragOver, setDragOv
             <span className="sample-icon" aria-hidden="true">
               <svg viewBox="0 0 12 12" width="10" height="10"><path d="M2 6 L4 6 L5 3 L7 9 L8 6 L10 6" stroke="currentColor" strokeWidth="1.2" fill="none" strokeLinejoin="round" strokeLinecap="round"/></svg>
             </span>
-            <span className="sample-name" title={sample.name}>{sample.name.replace(/\.[^.]+$/, '').slice(0, 10)}</span>
+            <span className="sample-name" title={sample.name}>{label}</span>
           </>
         ) : (
           <span className="instr-name">{label}</span>
         )}
       </span>
       {sample && (
-        <button
-          className="sample-clear"
-          onClick={(e) => { e.stopPropagation(); onClear(); }}
-          title="Revert to synth voice"
-        >×</button>
+        <button className="sample-clear" onClick={(e) => { e.stopPropagation(); onClear(); }} title="Revert to assigned voice">×</button>
       )}
     </div>
   );
@@ -289,13 +323,13 @@ function ExportModal({ progress, onCancel }) {
   return (
     <div className="modal-overlay">
       <div className="modal">
-        <div className="modal-header">RENDERING WAV</div>
+        <div className="modal-header"><span>RENDERING WAV</span></div>
         <div className="modal-body">
           <div className="modal-progress">
             <div className="modal-progress-bar" style={{ width: `${Math.round(progress * 100)}%` }} />
           </div>
           <div className="modal-progress-text">{Math.round(progress * 100)}% · bouncing offline</div>
-          <div className="modal-hint">Captures the full chain with swing, velocity, probability, samples, and sends.</div>
+          <div className="modal-hint">Captures the full chain with swing, velocity, probability, samples, pitched notes, and sends.</div>
         </div>
       </div>
     </div>
@@ -319,7 +353,6 @@ function Toast({ message, onClose }) {
 // App
 // ============================================================
 function App() {
-  // State
   const [started, setStarted] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [bpm, setBpmState] = useState(92);
@@ -335,7 +368,7 @@ function App() {
   const [delayFeedback, setDelayFeedback] = useState(0.35);
   const [delayTime, setDelayTime] = useState('3/8');
 
-  const [samples, setSamples] = useState({}); // {rowId: {name, buffer}}
+  const [samples, setSamples] = useState({}); // {slotIdx: {name, buffer}}
   const [dragOver, setDragOver] = useState(null);
   const [toast, setToast] = useState(null);
   const sampleNoticeShown = useRef(false);
@@ -350,13 +383,16 @@ function App() {
   const [importOpen, setImportOpen] = useState(false);
   const [exportJsonOpen, setExportJsonOpen] = useState(false);
 
+  // Popover/picker state: {slotIdx, anchor}
+  const [palettePopover, setPalettePopover] = useState(null);
+  const [notePicker, setNotePicker] = useState(null);
+  const [slotSettings, setSlotSettings] = useState(null);
+
   const engineRef = useRef(null);
   const rafRef = useRef(null);
 
-  // Derived
   const bank = banks[editBank];
 
-  // Start up the engine on user gesture
   const start = useCallback(() => {
     if (!engineRef.current) {
       const eng = new DrumEngine();
@@ -371,14 +407,13 @@ function App() {
     setStarted(true);
   }, []);
 
-  // Sync state → engine
   useEffect(() => { engineRef.current?.setBanks(banks); }, [banks]);
   useEffect(() => { engineRef.current?.setChain(chain); }, [chain]);
   useEffect(() => { engineRef.current?.setBPM(bpm); }, [bpm]);
   useEffect(() => { engineRef.current?.setDelayFeedback(delayFeedback); }, [delayFeedback]);
   useEffect(() => { engineRef.current?.setDelayTime(delayTime); }, [delayTime]);
 
-  // Playback indicator + row flashes
+  // Playback indicator + slot flashes
   useEffect(() => {
     if (!playing) { setPlayStateInternal({ step: -1, chainIdx: 0 }); return; }
     const tick = () => {
@@ -390,12 +425,13 @@ function App() {
             const bankIdx = chain[ps.chainIdx % chain.length];
             const b = banks[bankIdx];
             if (b) {
-              ROW_IDS.forEach(rid => {
-                const cell = b.pattern[rid]?.[ps.step];
-                if (cell?.on && !b.mutes[rid]) {
-                  setFlash(f => ({ ...f, [rid]: (f[rid] ?? 0) + 1 }));
+              for (let i = 0; i < SLOT_COUNT; i++) {
+                const slot = b.slots[i];
+                const cell = slot.pattern[ps.step];
+                if (cell?.on && !slot.mute) {
+                  setFlash(f => ({ ...f, [i]: (f[i] ?? 0) + 1 }));
                 }
-              });
+              }
             }
             return ps;
           }
@@ -412,6 +448,12 @@ function App() {
   const updateEditBank = (fn) => {
     setBanks(prev => prev.map((b, i) => (i === editBank ? fn(b) : b)));
   };
+  const updateSlot = (slotIdx, fn) => {
+    updateEditBank(b => {
+      const slots = b.slots.map((s, i) => (i === slotIdx ? fn(s) : s));
+      return { ...b, slots };
+    });
+  };
 
   const togglePlay = () => {
     if (!engineRef.current) return;
@@ -419,10 +461,12 @@ function App() {
     else { engineRef.current.play(); setPlaying(true); }
   };
 
-  // ----- Step interactions (apply to edit bank) -----
-  const onStepClick = (rowId, idx, e) => {
-    updateEditBank(b => {
-      const r = b.pattern[rowId];
+  // ----- Step interactions -----
+  const onStepClick = (slotIdx, idx, e) => {
+    const slot = bank.slots[slotIdx];
+    const pitched = isPitched(slot.sound);
+    updateSlot(slotIdx, s => {
+      const r = s.pattern;
       const cell = r[idx];
       let nextCell;
       if (cell.on && e.shiftKey) {
@@ -433,48 +477,86 @@ function App() {
         const order = [100, 75, 50, 25];
         const cur = order.indexOf(cell.probability);
         nextCell = { ...cell, probability: order[(cur + 1) % order.length] };
+      } else if (cell.on && pitched && (e.metaKey || e.ctrlKey)) {
+        // Open note picker — handled by Step component via separate handler; bail.
+        return s;
       } else {
-        nextCell = cell.on ? emptyCell() : onCell(1, 100);
+        if (cell.on) nextCell = emptyCell();
+        else {
+          nextCell = onCell(1, 100);
+          if (pitched) nextCell.note = s.defaultNote ?? 48;
+        }
       }
       const nr = [...r]; nr[idx] = nextCell;
-      return { ...b, pattern: { ...b.pattern, [rowId]: nr } };
+      return { ...s, pattern: nr };
     });
     setActivePreset(null);
   };
 
-  const onStepContext = (rowId, idx, e) => {
+  const onStepContext = (slotIdx, idx, e) => {
     e.preventDefault();
-    updateEditBank(b => {
-      const r = b.pattern[rowId];
+    updateSlot(slotIdx, s => {
+      const r = s.pattern;
       const cell = r[idx];
-      if (!cell.on) return b;
+      if (!cell.on) return s;
       const order = [1, 2, 0];
       const cur = order.indexOf(cell.velocity);
       const nr = [...r];
       nr[idx] = { ...cell, velocity: order[(cur + 1) % order.length] };
-      return { ...b, pattern: { ...b.pattern, [rowId]: nr } };
+      return { ...s, pattern: nr };
     });
     setActivePreset(null);
   };
 
-  const setRowVolume = (rowId, v) => {
-    updateEditBank(b => ({ ...b, volumes: { ...b.volumes, [rowId]: v } }));
+  const onStepPitchDrag = (slotIdx, idx, deltaSemis) => {
+    updateSlot(slotIdx, s => {
+      const r = s.pattern;
+      const cell = r[idx];
+      if (!cell.on) return s;
+      const base = cell.note ?? s.defaultNote ?? 48;
+      const next = Math.max(12, Math.min(96, base + deltaSemis));
+      if (next === base) return s;
+      const nr = [...r];
+      nr[idx] = { ...cell, note: next };
+      return { ...s, pattern: nr };
+    });
+    setActivePreset(null);
   };
-  const toggleRowMute = (rowId) => {
-    updateEditBank(b => ({ ...b, mutes: { ...b.mutes, [rowId]: !b.mutes[rowId] } }));
+
+  const onStepNotePickerOpen = (slotIdx, idx, anchorEl) => {
+    setNotePicker({ slotIdx, stepIdx: idx, anchor: anchorEl });
   };
-  const setRowRevSend = (rowId, v) => {
-    updateEditBank(b => ({ ...b, reverbSends: { ...b.reverbSends, [rowId]: v } }));
+
+  const setStepNote = (slotIdx, idx, note) => {
+    updateSlot(slotIdx, s => {
+      const r = s.pattern;
+      const cell = r[idx];
+      if (!cell.on) return s;
+      const nr = [...r];
+      nr[idx] = { ...cell, note };
+      return { ...s, pattern: nr };
+    });
+    setActivePreset(null);
   };
-  const setRowDelSend = (rowId, v) => {
-    updateEditBank(b => ({ ...b, delaySends: { ...b.delaySends, [rowId]: v } }));
+
+  // ----- Slot-level controls -----
+  const setSlotVolume = (slotIdx, v) => updateSlot(slotIdx, s => ({ ...s, volume: v }));
+  const toggleSlotMute = (slotIdx) => updateSlot(slotIdx, s => ({ ...s, mute: !s.mute }));
+  const setSlotRevSend = (slotIdx, v) => updateSlot(slotIdx, s => ({ ...s, reverbSend: v }));
+  const setSlotDelSend = (slotIdx, v) => updateSlot(slotIdx, s => ({ ...s, delaySend: v }));
+  const setBankReverbAmount = (v) => updateEditBank(b => ({ ...b, reverbAmount: v }));
+  const setBankSwing = (v) => updateEditBank(b => ({ ...b, swing: Math.round(Math.max(0, Math.min(66, v))) }));
+
+  const assignSlotSound = (slotIdx, soundKey) => {
+    updateSlot(slotIdx, s => reassignSlotSound(s, soundKey));
+    setPalettePopover(null);
+    setActivePreset(null);
   };
-  const setBankReverbAmount = (v) => {
-    updateEditBank(b => ({ ...b, reverbAmount: v }));
-  };
-  const setBankSwing = (v) => {
-    updateEditBank(b => ({ ...b, swing: Math.round(Math.max(0, Math.min(66, v))) }));
-  };
+
+  const setSlotGlide = (slotIdx, on) => updateSlot(slotIdx, s => ({ ...s, glide: !!on }));
+  const setSlotChord = (slotIdx, t) => updateSlot(slotIdx, s => ({ ...s, chordType: t }));
+  const setSlotFilter = (slotIdx, key, v) => updateSlot(slotIdx, s => ({ ...s, filter: { ...s.filter, [key]: v } }));
+  const setSlotTunable = (slotIdx, v) => updateSlot(slotIdx, s => ({ ...s, tunable: v }));
 
   // ----- Bank handlers -----
   const selectBank = (idx) => { setEditBank(idx); setActivePreset(null); };
@@ -483,15 +565,72 @@ function App() {
   const applyPreset = (name) => {
     const nb = bankFromPreset(name);
     setBanks(prev => prev.map((b, i) => (i === editBank ? nb : b)));
-    setBpmState(PRESETS[name].bpm ?? 92);
+    setBpmState(name === 'BOOM-BAP' ? 88 : name === 'TRAP' ? 140 : 124);
     setActivePreset(name);
   };
   const clearEditBank = () => {
-    setBanks(prev => prev.map((b, i) => (i === editBank ? emptyBank() : b)));
+    // Preserve current sound assignments + mix; clear patterns only
+    updateEditBank(b => ({
+      ...b,
+      slots: b.slots.map(s => ({ ...s, pattern: EMPTY_ROW() })),
+    }));
     setActivePreset(null);
   };
 
-  // ----- JSON import / AI prompt -----
+  // ----- Samples (now keyed by slot index) -----
+  const loadSample = async (slotIdx, file) => {
+    if (!engineRef.current?.ctx) return;
+    try {
+      const ab = await file.arrayBuffer();
+      const buf = await engineRef.current.ctx.decodeAudioData(ab.slice(0));
+      if (buf.duration > 10) {
+        setToast(`"${file.name}" is ${buf.duration.toFixed(1)}s — over the 10s cap. Trim and try again.`);
+        return;
+      }
+      engineRef.current.setSample(slotIdx, buf);
+      setSamples(prev => ({ ...prev, [slotIdx]: { name: file.name, buffer: buf } }));
+      if (!sampleNoticeShown.current) {
+        sampleNoticeShown.current = true;
+        setToast('Samples live in memory only — reload reverts slots to assigned voices.');
+      }
+    } catch (err) {
+      setToast(`Couldn't decode "${file.name}". Try a different .wav or .mp3.`);
+    }
+  };
+  const clearSample = (slotIdx) => {
+    engineRef.current?.setSample(slotIdx, null);
+    setSamples(prev => { const n = { ...prev }; delete n[slotIdx]; return n; });
+  };
+
+  // ----- WAV Export -----
+  const exportWav = async () => {
+    if (exporting) return;
+    if (playing) { engineRef.current.stop(); setPlaying(false); }
+    setExporting(true); setExportProgress(0);
+    try {
+      const { buffer: audioBuffer, musicalDuration } = await renderOffline({
+        banks, chain, bpm, delayFeedback, delayTime,
+        samples: Object.fromEntries(Object.entries(samples).map(([k, v]) => [k, v.buffer])),
+        onProgress: setExportProgress,
+      });
+      const trimmed = trimSilentTail(audioBuffer, { minSamples: Math.floor(musicalDuration * audioBuffer.sampleRate) });
+      const blob = encodeWav(trimmed);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.href = url; a.download = `pattern-16-${ts}.wav`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      setToast(`Export failed: ${err.message || err}`);
+    } finally {
+      setExporting(false);
+      setExportProgress(0);
+    }
+  };
+
+  // ----- JSON Import -----
   const handleJsonImport = (value, warnings) => {
     setBanks(value.banks);
     setChain(value.chain);
@@ -516,68 +655,11 @@ function App() {
     }
   };
 
-  // ----- Samples -----
-  const loadSample = async (rowId, file) => {
-    if (!engineRef.current?.ctx) return;
-    try {
-      const ab = await file.arrayBuffer();
-      const buf = await engineRef.current.ctx.decodeAudioData(ab.slice(0));
-      if (buf.duration > 10) {
-        setToast(`"${file.name}" is ${buf.duration.toFixed(1)}s — over the 10s cap. Trim and try again.`);
-        return;
-      }
-      engineRef.current.setSample(rowId, buf);
-      setSamples(prev => ({ ...prev, [rowId]: { name: file.name, buffer: buf } }));
-      if (!sampleNoticeShown.current) {
-        sampleNoticeShown.current = true;
-        setToast('Samples live in memory only — reload reverts rows to the synth voices.');
-      }
-    } catch (err) {
-      setToast(`Couldn't decode "${file.name}". Try a different .wav or .mp3.`);
-    }
-  };
-  const clearSample = (rowId) => {
-    engineRef.current?.setSample(rowId, null);
-    setSamples(prev => {
-      const n = { ...prev }; delete n[rowId]; return n;
-    });
-  };
-
-  // ----- Export -----
-  const exportWav = async () => {
-    if (exporting) return;
-    if (playing) { engineRef.current.stop(); setPlaying(false); }
-    setExporting(true); setExportProgress(0);
-    try {
-      const { buffer: audioBuffer, musicalDuration } = await renderOffline({
-        banks, chain, bpm, delayFeedback, delayTime,
-        samples: Object.fromEntries(Object.entries(samples).map(([k, v]) => [k, v.buffer])),
-        onProgress: setExportProgress,
-      });
-      const trimmed = trimSilentTail(audioBuffer, {
-        minSamples: Math.floor(musicalDuration * audioBuffer.sampleRate),
-      });
-      const blob = encodeWav(trimmed);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      a.href = url; a.download = `pattern-16-${ts}.wav`;
-      document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error(err);
-      setToast(`Export failed: ${err.message || err}`);
-    } finally {
-      setExporting(false);
-      setExportProgress(0);
-    }
-  };
-
   // Keyboard
   useEffect(() => {
     if (!started) return;
     const onKey = (e) => {
-      if (e.code === 'Space' && e.target.tagName !== 'INPUT') {
+      if (e.code === 'Space' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
         e.preventDefault();
         togglePlay();
       }
@@ -691,58 +773,76 @@ function App() {
 
       <div className="body">
         <div className="rows">
-          {ROWS.map((r, ri) => {
-            const isMuted = bank.mutes[r.id];
-            const sample = samples[r.id];
+          {SLOT_IDX.map((ri) => {
+            const slot = bank.slots[ri];
+            const pitched = isPitched(slot.sound);
+            const sample = samples[ri];
             return (
-              <div key={r.id} className={`row ${isMuted ? 'muted' : ''}`}>
+              <div key={ri} className={`row ${slot.mute ? 'muted' : ''} ${pitched ? 'pitched' : ''}`}>
                 <div className="row-ctrls">
                   <div className="row-name-wrap">
                     <span className="row-num">{String(ri + 1).padStart(2, '0')}</span>
-                    <SampleSlot
-                      rowId={r.id}
-                      label={r.label}
+                    <SlotLabel
+                      slotIdx={ri}
+                      slot={slot}
                       sample={sample}
-                      onLoad={(file) => loadSample(r.id, file)}
-                      onClear={() => clearSample(r.id)}
-                      dragOver={dragOver === r.id}
+                      onLoad={(file) => loadSample(ri, file)}
+                      onClear={() => clearSample(ri)}
+                      onOpenPalette={(idx, anchor) => setPalettePopover({ slotIdx: idx, anchor })}
+                      dragOver={dragOver === ri}
                       setDragOver={setDragOver}
                     />
-                    <span className="row-pulse" key={flash[r.id] || 0} />
+                    <span className="row-pulse" key={flash[ri] || 0} />
                   </div>
-                  <VolumeSlider value={bank.volumes[r.id]} onChange={(v) => setRowVolume(r.id, v)} />
+                  <VolumeSlider value={slot.volume} onChange={(v) => setSlotVolume(ri, v)} />
                   <div className="row-sends">
-                    <MiniSend
-                      value={bank.reverbSends[r.id]}
-                      onChange={(v) => setRowRevSend(r.id, v)}
-                      letter="R"
-                      color="rev"
-                    />
-                    <MiniSend
-                      value={bank.delaySends[r.id]}
-                      onChange={(v) => setRowDelSend(r.id, v)}
-                      letter="D"
-                      color="del"
-                    />
+                    <MiniSend value={slot.reverbSend} onChange={(v) => setSlotRevSend(ri, v)} letter="R" color="rev" />
+                    <MiniSend value={slot.delaySend} onChange={(v) => setSlotDelSend(ri, v)} letter="D" color="del" />
                   </div>
                   <button
-                    className={`mute ${isMuted ? 'on' : ''}`}
-                    onClick={() => toggleRowMute(r.id)}
+                    className={`slot-gear ${(slot.glide || hasChord(slot.sound) || hasFilter(slot.sound) || tunableValues(slot.sound)) ? 'has' : ''}`}
+                    onClick={(e) => setSlotSettings({ slotIdx: ri, anchor: e.currentTarget })}
+                    title="Slot settings"
+                    aria-label="Slot settings"
+                  >·</button>
+                  <button
+                    className={`mute ${slot.mute ? 'on' : ''}`}
+                    onClick={() => toggleSlotMute(ri)}
                     aria-label="Mute"
                   >M</button>
                 </div>
                 <div className="steps">
-                  {bank.pattern[r.id].map((cell, si) => (
+                  {slot.pattern.map((cell, si) => (
                     <Fragment key={si}>
-                      <Step
-                        cell={cell}
-                        current={playState.step === si}
-                        downbeat={si % 4 === 0}
-                        rowIndex={ri}
-                        stepIndex={si}
-                        onClick={(e) => onStepClick(r.id, si, e)}
-                        onContextMenu={(e) => onStepContext(r.id, si, e)}
-                      />
+                      {pitched ? (
+                        <PitchedStep
+                          cell={cell}
+                          current={playState.step === si}
+                          downbeat={si % 4 === 0}
+                          rowIndex={ri}
+                          stepIndex={si}
+                          defaultNote={slot.defaultNote ?? 48}
+                          onClick={(e) => {
+                            if (cell.on && (e.metaKey || e.ctrlKey)) {
+                              onStepNotePickerOpen(ri, si, e.currentTarget);
+                            } else {
+                              onStepClick(ri, si, e);
+                            }
+                          }}
+                          onContextMenu={(e) => onStepContext(ri, si, e)}
+                          onPitchDrag={(delta) => onStepPitchDrag(ri, si, delta)}
+                        />
+                      ) : (
+                        <PercStep
+                          cell={cell}
+                          current={playState.step === si}
+                          downbeat={si % 4 === 0}
+                          rowIndex={ri}
+                          stepIndex={si}
+                          onClick={(e) => onStepClick(ri, si, e)}
+                          onContextMenu={(e) => onStepContext(ri, si, e)}
+                        />
+                      )}
                       {si % 4 === 3 && si < 15 && <span className="step-gap" />}
                     </Fragment>
                   ))}
@@ -754,7 +854,7 @@ function App() {
 
         <div className="col-strip">
           <div className="col-strip-left">
-            <span className="hint">SHIFT/RIGHT-CLICK: VELOCITY · ALT-CLICK: PROBABILITY · DROP AUDIO ON A ROW LABEL</span>
+            <span className="hint">CLICK LABEL: SOUND · SHIFT/RIGHT-CLICK: VEL · ALT: PROB · ON PITCHED: DRAG ↕ FOR PITCH · CMD-CLICK: NOTE PICKER</span>
           </div>
           <div className="col-strip-steps">
             {Array.from({ length: 16 }).map((_, i) => (
@@ -786,6 +886,35 @@ function App() {
       </div>
 
       {exporting && <ExportModal progress={exportProgress} onCancel={() => {}} />}
+      {palettePopover && (
+        <PalettePopover
+          slotIdx={palettePopover.slotIdx}
+          currentSound={bank.slots[palettePopover.slotIdx].sound}
+          anchor={palettePopover.anchor}
+          onPick={(soundKey) => assignSlotSound(palettePopover.slotIdx, soundKey)}
+          onClose={() => setPalettePopover(null)}
+        />
+      )}
+      {notePicker && (
+        <NotePicker
+          slot={bank.slots[notePicker.slotIdx]}
+          cell={bank.slots[notePicker.slotIdx].pattern[notePicker.stepIdx]}
+          anchor={notePicker.anchor}
+          onPick={(note) => { setStepNote(notePicker.slotIdx, notePicker.stepIdx, note); setNotePicker(null); }}
+          onClose={() => setNotePicker(null)}
+        />
+      )}
+      {slotSettings && (
+        <SlotSettingsPopover
+          slot={bank.slots[slotSettings.slotIdx]}
+          anchor={slotSettings.anchor}
+          onGlide={(v) => setSlotGlide(slotSettings.slotIdx, v)}
+          onChord={(t) => setSlotChord(slotSettings.slotIdx, t)}
+          onFilter={(k, v) => setSlotFilter(slotSettings.slotIdx, k, v)}
+          onTunable={(v) => setSlotTunable(slotSettings.slotIdx, v)}
+          onClose={() => setSlotSettings(null)}
+        />
+      )}
       {importOpen && (
         <ImportJsonModal
           onClose={() => setImportOpen(false)}
