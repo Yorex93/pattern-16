@@ -447,6 +447,79 @@
   }
   .mini-send.active.rev .mini-send-letter { color: var(--accent); }
   .mini-send.active.del .mini-send-letter { color: var(--teal); }
+  .mini-send.active.drv .mini-send-ind { background: var(--red); box-shadow: 0 0 4px var(--red); }
+  .mini-send.active.drv .mini-send-body { box-shadow: inset 0 1px 1px rgba(255,255,255,0.1), 0 0 0 1px oklch(0.55 0.18 25 / 0.55), 0 0 6px oklch(0.55 0.18 25 / 0.35); }
+  .mini-send.active.drv .mini-send-letter { color: var(--red); }
+
+  /* MIX button */
+  .mix-btn {
+    height: 56px;
+    padding: 0 14px;
+    background: linear-gradient(180deg, #1c1812, #14100c);
+    border: 1px solid var(--line);
+    color: var(--ink-dim);
+    border-radius: 8px;
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.2em;
+    box-shadow: var(--shadow-inset);
+    transition: all 0.15s;
+  }
+  .mix-btn:hover { color: var(--accent); border-color: var(--line-2); transform: translateY(-1px); }
+  .mix-btn-dot { width: 8px; height: 8px; border-radius: 2px; background: linear-gradient(135deg, var(--accent), var(--teal)); box-shadow: 0 0 8px rgba(245,168,80,0.4); }
+
+  /* MIX modal sections */
+  .mix-modal { width: min(640px, 96vw); }
+  .mix-section { margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px dashed rgba(60, 50, 40, 0.4); }
+  .mix-section:last-child { border-bottom: none; padding-bottom: 0; }
+  .mix-section-title {
+    font-size: 9px; letter-spacing: 0.3em; color: var(--ink-faint);
+    margin-bottom: 12px;
+  }
+  .mix-section-foot {
+    font-size: 9px; letter-spacing: 0.05em; color: var(--ink-faint);
+    margin-top: 8px;
+  }
+  .mix-glue-row { display: flex; align-items: center; gap: 22px; }
+  .mix-glue-meaning {
+    font-size: 11px; color: var(--ink-dim);
+    line-height: 1.6;
+  }
+  .mix-glue-foot { margin-top: 6px; color: var(--ink-faint); font-size: 10px; }
+  .sc-controls { display: flex; align-items: center; gap: 16px; }
+  .sc-targets {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    flex: 1;
+  }
+  .sc-target {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 8px;
+    background: linear-gradient(180deg, #1c1812, #14100c);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    font-size: 10px;
+    cursor: pointer;
+    transition: all 0.12s;
+    user-select: none;
+  }
+  .sc-target:hover { border-color: var(--line-2); }
+  .sc-target.on {
+    background: linear-gradient(180deg, #2b2014, #1a130c);
+    color: var(--accent);
+    border-color: oklch(0.55 0.14 60);
+    box-shadow: 0 0 0 1px oklch(0.55 0.14 60 / 0.3);
+  }
+  .sc-target.kick {
+    opacity: 0.5;
+    background: linear-gradient(180deg, #1a1a1a, #101010);
+    cursor: not-allowed;
+  }
+  .sc-target input { width: 12px; height: 12px; }
+  .sc-target-num { font-family: "Space Grotesk", sans-serif; font-weight: 700; color: var(--ink-faint); }
+  .sc-target.on .sc-target-num { color: var(--accent); }
+  .sc-target-name { letter-spacing: 0.08em; }
+  .json-btn.auto-mix { background: linear-gradient(180deg, oklch(0.78 0.16 65), oklch(0.62 0.18 55)); color: #1a0f04; border-color: oklch(0.5 0.15 50); font-weight: 700; padding: 0 20px; }
 
   /* --- Sequencer body (tightened for 8 rows) --- */
   .body {
@@ -703,6 +776,88 @@
   @keyframes stepHit {
     0% { transform: scale(1.18); }
     100% { transform: scale(1); }
+  }
+
+  /* MEL toggle button (per pitched slot) */
+  .mel-btn {
+    height: 22px;
+    padding: 0 6px;
+    background: linear-gradient(180deg, #1c1812, #120e09);
+    border: 1px solid var(--line);
+    color: var(--ink-faint);
+    border-radius: 4px;
+    font-size: 9px; font-weight: 700; letter-spacing: 0.15em;
+    box-shadow: var(--shadow-inset);
+    transition: all 0.12s;
+    flex-shrink: 0;
+  }
+  .mel-btn:hover { color: oklch(0.85 0.14 295); border-color: oklch(0.5 0.12 295); }
+  .mel-btn.on {
+    color: #1a0f04;
+    background: linear-gradient(180deg, oklch(0.78 0.14 295), oklch(0.62 0.18 285));
+    border-color: oklch(0.5 0.12 285);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), 0 0 8px oklch(0.55 0.13 295 / 0.4);
+  }
+
+  /* Melody editor (piano roll) */
+  .melody-editor {
+    display: flex; flex-direction: column;
+    background: linear-gradient(180deg, #0f0c08, #0a0807);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 8px;
+  }
+  .melody-header {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 9px; letter-spacing: 0.2em; color: var(--ink-faint);
+    margin-bottom: 4px;
+  }
+  .melody-title { color: oklch(0.85 0.14 295); }
+  .melody-poly { color: var(--ink-dim); margin-left: 4px; }
+  .melody-key { display: flex; align-items: center; gap: 6px; font-size: 9px; letter-spacing: 0.18em; }
+  .melody-key select {
+    background: #0a0807; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 4px;
+    font-size: 10px; padding: 2px 4px;
+  }
+  .melody-grid { display: flex; flex-direction: column; gap: 0; }
+  .melody-row { display: flex; align-items: center; gap: 4px; }
+  .melody-label {
+    width: 32px; flex-shrink: 0;
+    font-size: 9px; color: var(--ink-faint);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    text-align: right;
+    padding-right: 4px;
+  }
+  .melody-row.root .melody-label { color: var(--accent); font-weight: 700; }
+  .melody-row.black { background: rgba(0,0,0,0.25); }
+  .melody-row.oos .melody-label { opacity: 0.4; }
+  .melody-cells { display: flex; gap: 2px; flex: 1; padding: 1px 0; }
+  .melody-cell {
+    flex: 1;
+    height: 11px;
+    background: linear-gradient(180deg, #1c1812, #110d09);
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    padding: 0;
+    cursor: pointer;
+    transition: background 0.08s, border-color 0.08s;
+  }
+  .melody-cell:hover { border-color: #5a4d3f; }
+  .melody-cell.downbeat { border-left-color: var(--line-2); }
+  .melody-cell.current { background: linear-gradient(180deg, #2a2018, #1a130d); border-color: oklch(0.6 0.14 60); }
+  .melody-cell.on {
+    background: linear-gradient(180deg, oklch(0.85 0.14 295), oklch(0.6 0.16 285));
+    border-color: oklch(0.5 0.12 285);
+    box-shadow: 0 0 6px oklch(0.6 0.14 290 / 0.5), inset 0 1px 0 rgba(255,255,255,0.3);
+  }
+  .melody-cell.on.v0 { background: linear-gradient(180deg, oklch(0.7 0.10 295), oklch(0.5 0.12 285)); }
+  .melody-cell.on.v2 { background: linear-gradient(180deg, oklch(0.92 0.16 295), oklch(0.72 0.18 285)); box-shadow: 0 0 12px oklch(0.7 0.16 290 / 0.7), inset 0 1px 0 rgba(255,255,255,0.4); }
+  .melody-cell.on.prob { opacity: 0.75; }
+  .melody-hint {
+    margin-top: 6px;
+    font-size: 8px; letter-spacing: 0.15em; color: var(--ink-faint); opacity: 0.7;
+    text-align: center;
   }
 
   /* Slot gear (settings popover trigger) */

@@ -90,6 +90,24 @@ function bankIsEmpty(b) {
 }
 
 // ---------- helpers ----------
+// Scientific pitch notation: "C4", "F#3", "Eb2", "G#-1". A4 = MIDI 69.
+const NOTE_OFFSETS = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+const NOTE_NAMES_SHARP = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+function parseScientificPitch(s) {
+  if (typeof s !== "string") return null;
+  const m = s.trim().match(/^([A-Ga-g])([#b]?)(-?\d+)$/);
+  if (!m) return null;
+  const base = NOTE_OFFSETS[m[1].toUpperCase()];
+  if (base == null) return null;
+  const accidental = m[2] === "#" ? 1 : m[2] === "b" ? -1 : 0;
+  const octave = parseInt(m[3], 10);
+  return (octave + 1) * 12 + base + accidental;
+}
+function midiToScientific(midi) {
+  const m = Math.round(midi);
+  return `${NOTE_NAMES_SHARP[((m % 12) + 12) % 12]}${Math.floor(m / 12) - 1}`;
+}
+
 function isFiniteNumber(x) {
   return typeof x === "number" && Number.isFinite(x);
 }
@@ -157,23 +175,23 @@ export function parsePattern(json) {
     };
   }
 
-  // version — accept 1 (migrate), 2 (no kit field), or 3 (current)
+  // version — accept 1/2 (migrate), 3, or 4 (current)
   if (!("version" in obj)) {
     errors.push({
       path: "version",
       message:
-        'Missing required "version" field. Expected 3 (or 1/2 to be migrated).',
+        'Missing required "version" field. Expected 4 (or 1/2/3 to be migrated).',
     });
   } else if (obj.version === 1) {
     return parseV1ThenMigrate(obj);
-  } else if (obj.version !== 2 && obj.version !== 3) {
-    if (isFiniteNumber(obj.version) && obj.version > 3) {
+  } else if (obj.version !== 2 && obj.version !== 3 && obj.version !== 4) {
+    if (isFiniteNumber(obj.version) && obj.version > 4) {
       return {
         ok: false,
         errors: [
           {
             path: "version",
-            message: `This file uses schema version ${obj.version}; this app supports version 3.`,
+            message: `This file uses schema version ${obj.version}; this app supports version 4.`,
           },
         ],
         warnings: [],
@@ -181,7 +199,7 @@ export function parsePattern(json) {
     }
     errors.push({
       path: "version",
-      message: "version must equal 3 (or 1/2 for migration).",
+      message: "version must equal 4 (or 1/2/3 for migration).",
     });
   }
 
@@ -321,6 +339,36 @@ export function parsePattern(json) {
     else kitId = obj.kit;
   }
 
+  // Optional top-level "mix" object (v4+). v3 files just don't have it.
+  let mix = null;
+  if ("mix" in obj && obj.mix != null) {
+    const m = obj.mix;
+    if (typeof m !== "object" || Array.isArray(m)) {
+      errors.push({ path: "mix", message: "mix must be an object." });
+    } else {
+      mix = { glue: 0.35, sidechain: { amount: 0.5, targets: [] } };
+      if ("glue" in m) {
+        if (!inRange(m.glue, 0, 1)) errors.push({ path: "mix.glue", message: "mix.glue must be 0–1." });
+        else mix.glue = m.glue;
+      }
+      if ("sidechain" in m && m.sidechain && typeof m.sidechain === "object") {
+        if ("amount" in m.sidechain) {
+          if (!inRange(m.sidechain.amount, 0, 1)) errors.push({ path: "mix.sidechain.amount", message: "mix.sidechain.amount must be 0–1." });
+          else mix.sidechain.amount = m.sidechain.amount;
+        }
+        if (Array.isArray(m.sidechain.targets)) {
+          const tIdx = [];
+          for (const t of m.sidechain.targets) {
+            const n = Number(t) - 1;
+            if (!Number.isInteger(n) || n < 0 || n >= SLOT_COUNT) errors.push({ path: "mix.sidechain.targets", message: `target "${t}" must be a slot key "1".."8".` });
+            else tIdx.push(n);
+          }
+          mix.sidechain.targets = Array.from(new Set(tIdx)).sort((a, b) => a - b);
+        }
+      }
+    }
+  }
+
   const KNOWN_TOP = new Set([
     "version",
     "name",
@@ -330,6 +378,7 @@ export function parsePattern(json) {
     "banks",
     "chain",
     "kit",
+    "mix",
   ]);
   for (const k of Object.keys(obj))
     if (!KNOWN_TOP.has(k))
@@ -362,6 +411,7 @@ export function parsePattern(json) {
       bankPresent: bankExplicitlyNull.map((n, i) => !n && banks[i] !== null),
       chain: chainIdx,
       kit: kitId,
+      mix,
     },
   };
 }
@@ -536,6 +586,7 @@ function parseV1ThenMigrate(v1) {
       bankPresent: bankNull.map((n, i) => !n && banks[i] !== null),
       chain: chainIdx,
       kit: null,
+      mix: null,
     },
   };
 }
@@ -651,6 +702,14 @@ function parseSlot(v, base, errors, warnings) {
   else
     errors.push({ path: path("delaySend"), message: "delaySend must be 0–1." });
 
+  // v4: per-slot drive (optional, defaults 0)
+  if ("drive" in v && v.drive != null) {
+    if (inRange(v.drive, 0, 1)) slot.drive = v.drive;
+    else errors.push({ path: path("drive"), message: "drive must be 0–1." });
+  } else {
+    slot.drive = 0;
+  }
+
   if (typeof v.steps !== "string" || v.steps.length !== 16) {
     errors.push({
       path: path("steps"),
@@ -695,6 +754,45 @@ function parseSlot(v, base, errors, warnings) {
     for (let i = 0; i < 16; i++)
       if (slot.pattern[i].on && slot.pattern[i].note == null)
         slot.pattern[i].note = slot.defaultNote;
+
+    // v4: melody array — supersedes the grid pattern for this slot when present.
+    if ("melody" in v && Array.isArray(v.melody)) {
+      const melody = [];
+      for (let mi = 0; mi < v.melody.length; mi++) {
+        const n = v.melody[mi];
+        if (!n || typeof n !== "object") {
+          errors.push({ path: `${path("melody")}[${mi}]`, message: "melody item must be an object." });
+          continue;
+        }
+        if (!Number.isInteger(n.step) || n.step < 1 || n.step > 16) {
+          errors.push({ path: `${path("melody")}[${mi}].step`, message: "step must be an integer 1–16." });
+          continue;
+        }
+        const pitchMidi = parseScientificPitch(n.pitch);
+        if (pitchMidi == null) {
+          errors.push({ path: `${path("melody")}[${mi}].pitch`, message: `pitch "${n.pitch}" must be scientific notation (e.g. "A3", "F#2", "Eb4").` });
+          continue;
+        }
+        let length = 1;
+        if ("length" in n) {
+          if (!Number.isInteger(n.length) || n.length < 1 || n.length > 16) errors.push({ path: `${path("melody")}[${mi}].length`, message: "length must be 1–16." });
+          else length = n.length;
+        }
+        let velocity = 1;
+        if ("velocity" in n) {
+          const map = { soft: 0, medium: 1, loud: 2 };
+          if (!(n.velocity in map)) errors.push({ path: `${path("melody")}[${mi}].velocity`, message: 'velocity must be "soft", "medium", or "loud".' });
+          else velocity = map[n.velocity];
+        }
+        let probability = 100;
+        if ("probability" in n) {
+          if (![100, 75, 50, 25].includes(n.probability)) errors.push({ path: `${path("melody")}[${mi}].probability`, message: "probability must be 100, 75, 50, or 25." });
+          else probability = n.probability;
+        }
+        melody.push({ step: n.step, pitch: pitchMidi, length, velocity, probability });
+      }
+      slot.melody = melody;
+    }
   }
 
   // filter
@@ -743,11 +841,13 @@ function parseSlot(v, base, errors, warnings) {
     "mute",
     "reverbSend",
     "delaySend",
+    "drive",
     "steps",
     "accents",
     "probability",
     "glide",
     "notes",
+    "melody",
     "filter",
     "chordType",
     "tunable",
@@ -765,7 +865,7 @@ function parseSlot(v, base, errors, warnings) {
 
 // ---------- serializer ----------
 export function serializePattern(state) {
-  const { name, bpm, banks, chain, delayTime, delayFeedback, editBank, kit } =
+  const { name, bpm, banks, chain, delayTime, delayFeedback, editBank, kit, mix } =
     state;
   const refBank =
     banks[editBank] ?? banks.find((b) => !bankIsEmpty(b)) ?? banks[0];
@@ -779,7 +879,7 @@ export function serializePattern(state) {
   });
 
   const out = {
-    version: 3,
+    version: 4,
     name: (name && name.trim()) || "untitled",
     bpm,
     swing: Math.round(swInt) / 100,
@@ -791,6 +891,15 @@ export function serializePattern(state) {
     chain: chain.map((i) => BANK_LETTERS[i]),
   };
   if (kit) out.kit = kit;
+  if (mix) {
+    out.mix = {
+      glue: round3(mix.glue ?? 0.35),
+      sidechain: {
+        amount: round3(mix.sidechain?.amount ?? 0.5),
+        targets: (mix.sidechain?.targets ?? []).map((i) => String(i + 1)),
+      },
+    };
+  }
   return out;
 }
 
@@ -813,6 +922,7 @@ function slotToJson(s) {
     reverbSend: round3(s.reverbSend),
     delaySend: round3(s.delaySend),
   };
+  if (s.drive && s.drive > 0) out.drive = round3(s.drive);
   // steps + probability strings
   let steps = "",
     prob = "",
@@ -854,6 +964,21 @@ function slotToJson(s) {
     };
   if (hasChord(s.sound) && s.chordType) out.chordType = s.chordType;
   if (tunableValues(s.sound) && s.tunable) out.tunable = s.tunable;
+
+  // v4 melody (pitched only) — supersedes the notes string when present
+  if (isPitched(s.sound) && Array.isArray(s.melody) && s.melody.length) {
+    const VEL_NAME = ["soft", "medium", "loud"];
+    out.melody = s.melody.map((n) => {
+      const item = {
+        step: n.step,
+        pitch: midiToScientific(n.pitch),
+      };
+      if (n.length && n.length !== 1) item.length = n.length;
+      if (n.velocity !== 1) item.velocity = VEL_NAME[n.velocity ?? 1];
+      if (n.probability !== 100) item.probability = n.probability;
+      return item;
+    });
+  }
   return out;
 }
 
@@ -980,6 +1105,32 @@ Now produce a pattern for this request:
 `;
 
 export const AI_SYSTEM_PROMPT = `You are an expert beat producer helping a user design a drum pattern for Pattern-16, a 16-step groovebox. Output a single JSON object matching the schema below. Output JSON only — no commentary, no markdown fences, no explanation before or after.
+
+# v4 ADDITIONS (READ THIS BEFORE THE REST)
+- Top-level "mix" object: { "glue": <0-1>, "sidechain": { "amount": <0-1>, "targets": ["1","3",...] } }. Glue is the master bus compressor+saturator+limiter knob. Sidechain ducks the listed slots whenever the kick fires.
+- Per-slot "drive": <0-1>, an optional saturator on each slot. 0 if omitted.
+- Per-pitched-slot "melody": optional array of note objects. When present, it supersedes the slot's "notes" string for that slot. Use melody arrays for melodic content (pluck, pad, lead lines, multi-step bass sustains). Use "notes" string for grid-aligned basslines that just play once per active step.
+
+melody[] item shape: { "step": <1-16>, "pitch": "<scientific notation, e.g. A3, F#2, Eb4>", "length": <1-16>, "velocity": "soft"|"medium"|"loud", "probability": 100|75|50|25 }
+  length, velocity, probability are optional — omit when defaulted (length 1, velocity medium, probability 100).
+  Mono pitched voices (808, sub-bass, synth-bass, acid-bass, reese-bass, pluck) allow ONE note per step.
+  Polyphonic voices (chord-stab, pad) allow UP TO 4 notes at the same step — voice chords by stacking multiple melody items at the same step with different pitches.
+
+MIX HEURISTICS
+- House / techno: glue 0.4–0.5, sidechain amount 0.55–0.7 on all bass and tonal slots — the pumping bass IS the genre.
+- Boom-bap / lo-fi: glue 0.3–0.4, sidechain amount 0–0.15 (subtle), drive 0.15–0.25 on the kick + snare for tape warmth.
+- Trap / drill: glue 0.4–0.5, sidechain amount 0.4–0.6 on the 808, drive 0.3–0.4 on the kick.
+- Acid house: glue 0.4, sidechain 0.5 on acid-bass, drive 0.25 on acid-bass for extra growl.
+- DnB / jungle: glue 0.5, sidechain 0.5 on reese+sub, drive 0.2 on snare/break.
+- Ambient: glue 0.25, no sidechain, no drive — let the air breathe.
+
+MELODY MODE GUIDANCE
+- For pluck / pad / lead lines: ALWAYS use a melody array, not a notes string. The melody array supports multi-step note lengths which are essential for sustained pads. Example pad: one note at step 1 with length 16.
+- For 808 and synth-bass: a notes-string-with-grid is usually fine, but switch to melody when you need notes that don't fall on the grid or want explicit length control.
+- Multi-step notes in melody mode hold the voice gate open — perfect for evolving pads and long bass notes.
+- Chord stab can voice an actual chord by placing several melody items at the same step (e.g. step 5 with pitches A3, C4, E4 for an Am triad). The slot's chordType setting also handles voicing; melody mode lets you spell chords explicitly.
+
+
 
 # OUTPUT CONTRACT (READ THIS FIRST)
 

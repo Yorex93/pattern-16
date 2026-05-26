@@ -31,22 +31,82 @@ function delaySeconds(bpm, frac) {
   return quarter * (DELAY_FRACTIONS[frac] ?? 1.5);
 }
 
-// Build a "trigger destination" — a gain that fans to dry + reverb-send + delay-send,
-// scaled by slot volume × velocity gain.
-function makeDest(routing, slotIdx, slotVol, velGain, revSend, delSend) {
-  const ctx = routing.ctx;
-  const trim = ctx.createGain();
-  trim.gain.value = slotVol * velGain;
-  trim.connect(routing.slotBuses[slotIdx]);
-  if (revSend > 0 && routing.reverbIn) {
-    const rs = ctx.createGain(); rs.gain.value = revSend;
-    trim.connect(rs).connect(routing.reverbIn);
-  }
-  if (delSend > 0 && routing.delayIn) {
-    const ds = ctx.createGain(); ds.gain.value = delSend;
-    trim.connect(ds).connect(routing.delayIn);
-  }
+// Build a "trigger destination". The persistent per-slot chain
+//   velTrim → slotVol[i] → slotDrive[i] → slotDucker[i] → fan(bus + sends)
+// is owned by the routing object. Each trigger only adds the per-trigger
+// velocity-gain node; everything downstream is pre-built.
+function makeDest(routing, slotIdx, velGain) {
+  const trim = routing.ctx.createGain();
+  trim.gain.value = velGain;
+  trim.connect(routing.slotVol[slotIdx]);
   return trim;
+}
+
+// ---------- Mix-chain helpers (master GLUE) ----------
+function makeSaturationCurve(amount) {
+  // amount in 0..1. Higher = more harmonic content + soft clipping.
+  const N = 4096;
+  const curve = new Float32Array(N);
+  const k = 1 + amount * 10;
+  const norm = Math.tanh(k);
+  for (let i = 0; i < N; i++) {
+    const x = (i / (N - 1)) * 2 - 1;
+    curve[i] = Math.tanh(k * x) / norm;
+  }
+  return curve;
+}
+
+// Apply a unified GLUE (0..1) across compressor + saturator. Limiter is always
+// on regardless. Tasteful curve: 0 → near-bypass; 0.35 → mix "snap"; 0.7 →
+// audible harmonics; 1 → distorted.
+function applyGlue(routing, glue) {
+  routing.glue = glue;
+  const g = Math.max(0, Math.min(1, glue));
+  // Compressor threshold: -3 dB (gentle) → -22 dB (heavy bus pump)
+  if (routing.compressor) routing.compressor.threshold.value = -3 - g * 19;
+  // Saturator drive scales nonlinearly so subtle settings stay clean
+  if (routing.saturator) routing.saturator.curve = makeSaturationCurve(g * 0.55);
+}
+
+function setSlotDrive(routing, slotIdx, drive) {
+  const shaper = routing.slotDrive[slotIdx];
+  if (!shaper) return;
+  // Per-slot drive curve. Pass-through at 0; up to mild crunch at 1.
+  const N = 1024;
+  const curve = new Float32Array(N);
+  const k = 1 + Math.max(0, Math.min(1, drive)) * 6;
+  const norm = Math.tanh(k);
+  for (let i = 0; i < N; i++) {
+    const x = (i / (N - 1)) * 2 - 1;
+    curve[i] = Math.tanh(k * x) / norm;
+  }
+  shaper.curve = curve;
+}
+
+function setSlotVolume(routing, slotIdx, vol) {
+  const g = routing.slotVol[slotIdx];
+  if (g) g.gain.value = vol;
+}
+function setSlotRevSend(routing, slotIdx, v) {
+  const g = routing.slotRevSend[slotIdx];
+  if (g) g.gain.value = v;
+}
+function setSlotDelSend(routing, slotIdx, v) {
+  const g = routing.slotDelSend[slotIdx];
+  if (g) g.gain.value = v;
+}
+
+// Schedule a sidechain duck event at `time` on the slot's ducker gain. amount
+// is 0..1 (depth); ducker dives to (1-amount) at the trigger time and recovers
+// linearly over `recoveryMs`.
+function triggerDuck(routing, slotIdx, time, amount, recoveryMs = 150) {
+  const d = routing.slotDucker[slotIdx];
+  if (!d) return;
+  const minGain = Math.max(0, 1 - amount);
+  try { d.gain.cancelScheduledValues(time); } catch {}
+  d.gain.setValueAtTime(1, Math.max(0, time - 0.0001));
+  d.gain.linearRampToValueAtTime(minGain, time + 0.005);
+  d.gain.linearRampToValueAtTime(1, time + recoveryMs / 1000);
 }
 
 // Compute per-step glide source pitches for a pitched slot, considering the
@@ -68,7 +128,7 @@ function triggerSlot(routing, slotIdx, time, cell, slot, samples, barSec) {
   if (slot.mute) return;
   const velocity = cell.velocity ?? 1;
   const velGain = VEL_GAIN[velocity] ?? 0.85;
-  const dest = makeDest(routing, slotIdx, slot.volume, velGain, slot.reverbSend, slot.delaySend);
+  const dest = makeDest(routing, slotIdx, velGain);
 
   const buf = samples[slotIdx];
   if (buf) {
@@ -83,19 +143,17 @@ function triggerSlot(routing, slotIdx, time, cell, slot, samples, barSec) {
     filter: slot.filter,
     chord: slot.chordType,
     tunable: slot.tunable,
+    lengthSec: cell.__lengthSec ?? null,
     barSec,
   });
 }
 
-// Continuous voices (e.g. vinyl-bed) play one bar-long texture per bar instead
-// of per-step hits. Active steps just gate the bed on/off for that bar.
 function maybeTriggerBed(routing, slotIdx, time, slot, samples, barSec) {
   if (slot.mute) return;
   if (!slot.pattern.some(c => c.on)) return;
-  const dest = makeDest(routing, slotIdx, slot.volume, 1, slot.reverbSend, slot.delaySend);
+  const dest = makeDest(routing, slotIdx, 1);
   const buf = samples[slotIdx];
   if (buf) {
-    // Sample upload on a continuous slot still plays per-bar like the bed.
     triggerSample(routing.ctx, time, dest, buf);
     return;
   }
@@ -105,20 +163,82 @@ function maybeTriggerBed(routing, slotIdx, time, slot, samples, barSec) {
 }
 
 // ----- Routing builder (shared by live + offline) -----
+// Topology:
+//   per slot (i): velTrim → slotVol[i] → slotDrive[i] → slotDucker[i]
+//                  → fan: slotBus[i] (dry), slotRevSend[i] → reverbIn,
+//                         slotDelSend[i] → delayIn
+//   slotBuses[*], reverbWet, delayWet → master → [glue chain] → destination
+// Glue chain: compressor → saturator → limiter → destination
 function buildRouting(ctx, opts) {
-  const { reverbAmount = 0.25, delayFeedback = 0.35, delayTimeSec = 0.5 } = opts;
+  const {
+    reverbAmount = 0.25,
+    delayFeedback = 0.35,
+    delayTimeSec = 0.5,
+    glue = 0.35,
+    slotVolumes = {},
+    slotDrives = {},
+    slotRevSends = {},
+    slotDelSends = {},
+  } = opts;
 
+  // ---- master GLUE chain ----
+  const limiter = ctx.createDynamicsCompressor();
+  limiter.threshold.value = -0.3;
+  limiter.knee.value = 0;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.001;
+  limiter.release.value = 0.05;
+  limiter.connect(ctx.destination);
+
+  const saturator = ctx.createWaveShaper();
+  saturator.oversample = '4x';
+  saturator.connect(limiter);
+
+  const compressor = ctx.createDynamicsCompressor();
+  compressor.ratio.value = 2;
+  compressor.knee.value = 6;
+  compressor.attack.value = 0.01;
+  compressor.release.value = 0.1;
+  compressor.threshold.value = -8;
+  compressor.connect(saturator);
+
+  // Master sum node — all sources merge here pre-glue
   const master = ctx.createGain();
   master.gain.value = 0.85;
-  master.connect(ctx.destination);
+  master.connect(compressor);
 
-  const slotBuses = {};
+  // ---- persistent per-slot chain ----
+  const slotVol = {}, slotDrive = {}, slotDucker = {};
+  const slotBuses = {}, slotRevSend = {}, slotDelSend = {};
   for (const i of SLOT_INDICES) {
-    const g = ctx.createGain(); g.gain.value = 1;
-    g.connect(master);
-    slotBuses[i] = g;
+    slotVol[i] = ctx.createGain();
+    slotVol[i].gain.value = slotVolumes[i] ?? 0.85;
+
+    slotDrive[i] = ctx.createWaveShaper();
+    slotDrive[i].oversample = '2x';
+    // initial curve set by setSlotDrive(routing, i, ...)
+
+    slotDucker[i] = ctx.createGain();
+    slotDucker[i].gain.value = 1;
+
+    slotBuses[i] = ctx.createGain();
+    slotBuses[i].gain.value = 1;
+    slotBuses[i].connect(master);
+
+    slotRevSend[i] = ctx.createGain();
+    slotRevSend[i].gain.value = slotRevSends[i] ?? 0;
+
+    slotDelSend[i] = ctx.createGain();
+    slotDelSend[i].gain.value = slotDelSends[i] ?? 0;
+
+    slotVol[i].connect(slotDrive[i]);
+    slotDrive[i].connect(slotDucker[i]);
+    slotDucker[i].connect(slotBuses[i]);
+    slotDucker[i].connect(slotRevSend[i]);
+    slotDucker[i].connect(slotDelSend[i]);
   }
 
+  // ---- send returns into master ----
   const reverbIn = ctx.createGain(); reverbIn.gain.value = 1;
   const convolver = ctx.createConvolver();
   convolver.buffer = makeIR(ctx, 2.4, 2.2);
@@ -136,11 +256,22 @@ function buildRouting(ctx, opts) {
   delayNode.connect(fbFilter).connect(feedback).connect(delayNode);
   delayNode.connect(delayWet).connect(master);
 
-  return {
-    ctx, master, slotBuses,
+  for (const i of SLOT_INDICES) {
+    slotRevSend[i].connect(reverbIn);
+    slotDelSend[i].connect(delayIn);
+  }
+
+  const routing = {
+    ctx, master, compressor, saturator, limiter,
+    slotVol, slotDrive, slotDucker, slotBuses, slotRevSend, slotDelSend,
     reverbIn, reverbWet, convolver,
     delayIn, delayNode, delayWet, feedback, fbFilter,
+    glue,
   };
+  // Initialize curves
+  applyGlue(routing, glue);
+  for (const i of SLOT_INDICES) setSlotDrive(routing, i, slotDrives[i] ?? 0);
+  return routing;
 }
 
 // Iterate slots of a bank for scheduling. Yields { slotIdx, slot, glideSource? }.
@@ -165,7 +296,9 @@ class DrumEngine {
     this.delayTime = '3/8';
     this.banks = [];
     this.chain = [0];
-    this.samples = {}; // {slotIdx: AudioBuffer | null}
+    this.samples = {};
+    // Mix is global: glue knob + sidechain depth + per-slot target list (idx 0..7)
+    this.mix = { glue: 0.35, sidechain: { amount: 0.5, targets: [] } };
     this.isPlaying = false;
     this.currentStep = 0;
     this.chainIdx = 0;
@@ -180,15 +313,31 @@ class DrumEngine {
     if (this.ctx) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     this.ctx = new AC();
+    const slotVolumes = {}, slotDrives = {}, slotRevSends = {}, slotDelSends = {};
+    const bank0 = this.banks[0];
+    if (bank0) for (let i = 0; i < SLOT_COUNT; i++) {
+      const s = bank0.slots[i] || {};
+      slotVolumes[i] = s.volume ?? 0.85;
+      slotDrives[i] = s.drive ?? 0;
+      slotRevSends[i] = s.reverbSend ?? 0;
+      slotDelSends[i] = s.delaySend ?? 0;
+    }
     this.routing = buildRouting(this.ctx, {
-      reverbAmount: this.banks[0]?.reverbAmount ?? 0.25,
+      reverbAmount: bank0?.reverbAmount ?? 0.25,
       delayFeedback: this.delayFeedback,
       delayTimeSec: delaySeconds(this.bpm, this.delayTime),
+      glue: this.mix.glue,
+      slotVolumes, slotDrives, slotRevSends, slotDelSends,
     });
   }
 
-  setBanks(banks) { this.banks = banks; this._syncBankParams(); }
+  setBanks(banks) { this.banks = banks; this._syncBankParams(); this._syncSlotParams(); }
   setChain(chain) { this.chain = (chain && chain.length) ? chain : [0]; }
+  setMix(mix) {
+    if (!mix) return;
+    this.mix = { ...this.mix, ...mix };
+    if (this.routing) applyGlue(this.routing, this.mix.glue ?? 0.35);
+  }
   setBPM(b) {
     this.bpm = b;
     if (this.routing) this.routing.delayNode.delayTime.value = delaySeconds(b, this.delayTime);
@@ -207,6 +356,21 @@ class DrumEngine {
     if (!this.routing) return;
     const b = this.getPlayingBank();
     if (b) this.routing.reverbWet.gain.value = b.reverbAmount;
+  }
+
+  // Push per-slot params (volume, drive, sends) of the playing bank into the
+  // persistent slot chain. Called whenever banks change or bank switches.
+  _syncSlotParams() {
+    if (!this.routing) return;
+    const b = this.getPlayingBank();
+    if (!b) return;
+    for (let i = 0; i < SLOT_COUNT; i++) {
+      const s = b.slots[i] || {};
+      setSlotVolume(this.routing, i, s.volume ?? 0.85);
+      setSlotDrive(this.routing, i, s.drive ?? 0);
+      setSlotRevSend(this.routing, i, s.reverbSend ?? 0);
+      setSlotDelSend(this.routing, i, s.delaySend ?? 0);
+    }
   }
 
   getPlayingBankIndex() {
@@ -251,14 +415,48 @@ class DrumEngine {
     if (!bank) return;
     if (step === 0 && this.routing) {
       this.routing.reverbWet.gain.setTargetAtTime(bank.reverbAmount, baseTime, 0.01);
+      this._syncSlotParams();
     }
     const barSec = (60 / this.bpm) * 4;
+    const sixteenth = (60 / this.bpm) / 4;
+
+    // First pass: detect kick hits to fire sidechain ducks at the same time
+    const kickFiresThisStep = this._kickFiresAtStep(bank, step);
+    if (kickFiresThisStep) {
+      const amt = this.mix.sidechain?.amount ?? 0;
+      const targets = this.mix.sidechain?.targets ?? [];
+      if (amt > 0 && targets.length) {
+        for (const t of targets) triggerDuck(this.routing, t, triggerTime, amt, 150);
+      }
+    }
+
     for (const { slotIdx, slot, glideSource } of iterSlots(bank)) {
-      // Continuous voices: trigger once per bar, gated by "any step active".
       if (isContinuous(slot.sound)) {
         if (step === 0) maybeTriggerBed(this.routing, slotIdx, baseTime, slot, this.samples, barSec);
         continue;
       }
+      // Melody-mode notes for pitched slots — scheduled at step 0 of each bar
+      // because individual notes can span multiple steps.
+      if (slot.melody && Array.isArray(slot.melody) && step === 0) {
+        for (const n of slot.melody) {
+          const p = n.probability ?? 100;
+          if (p < 100 && Math.random() * 100 >= p) continue;
+          const noteStep = (n.step | 0) - 1;
+          if (noteStep < 0 || noteStep > 15) continue;
+          const noteTime = baseTime + noteStep * sixteenth;
+          const lengthSec = Math.max(1, (n.length | 0)) * sixteenth;
+          const cell = {
+            on: true,
+            velocity: n.velocity ?? 1,
+            probability: n.probability ?? 100,
+            note: n.pitch ?? slot.defaultNote,
+            __lengthSec: lengthSec,
+          };
+          triggerSlot(this.routing, slotIdx, noteTime, cell, slot, this.samples, barSec);
+        }
+        continue;
+      }
+      // Grid-mode (legacy) — per-step cell triggering
       const cell = slot.pattern[step];
       if (!cell?.on) continue;
       const p = cell.probability ?? 100;
@@ -270,6 +468,16 @@ class DrumEngine {
     }
     this.queue.push({ step, chainIdx, time: baseTime });
     if (this.queue.length > 64) this.queue.shift();
+  }
+
+  _kickFiresAtStep(bank, step) {
+    for (let i = 0; i < SLOT_COUNT; i++) {
+      const s = bank.slots[i];
+      if (!s || s.sound !== 'kick' || s.mute) continue;
+      const c = s.pattern[step];
+      if (c?.on) return true;
+    }
+    return false;
   }
 
   _advance() {
@@ -297,7 +505,7 @@ class DrumEngine {
 // ============================================================
 // Offline render — chain → AudioBuffer
 // ============================================================
-async function renderOffline({ banks, chain, bpm, delayFeedback, delayTime, samples, onProgress }) {
+async function renderOffline({ banks, chain, bpm, delayFeedback, delayTime, samples, mix, onProgress }) {
   const sixteenth = (60 / bpm) / 4;
   const bars = chain.length;
   const sampleRate = 48000;
@@ -330,31 +538,65 @@ async function renderOffline({ banks, chain, bpm, delayFeedback, delayTime, samp
     else localSamples[id] = await resample(buf, sampleRate);
   }
 
+  // Build the bank-0 slot params so the offline routing matches live playback
+  const slotVolumes = {}, slotDrives = {}, slotRevSends = {}, slotDelSends = {};
+  const bank0 = banks[chain[0]];
+  if (bank0) for (let i = 0; i < SLOT_COUNT; i++) {
+    const s = bank0.slots[i] || {};
+    slotVolumes[i] = s.volume ?? 0.85;
+    slotDrives[i] = s.drive ?? 0;
+    slotRevSends[i] = s.reverbSend ?? 0;
+    slotDelSends[i] = s.delaySend ?? 0;
+  }
+
   const routing = buildRouting(ctx, {
-    reverbAmount: banks[chain[0]]?.reverbAmount ?? 0.25,
+    reverbAmount: bank0?.reverbAmount ?? 0.25,
     delayFeedback,
     delayTimeSec,
+    glue: mix?.glue ?? 0.35,
+    slotVolumes, slotDrives, slotRevSends, slotDelSends,
   });
 
+  const sidechain = mix?.sidechain ?? { amount: 0, targets: [] };
   const barSec = (60 / bpm) * 4;
   let hitCount = 0;
+  let activeBank = null;
   for (let bar = 0; bar < bars; bar++) {
     const bank = banks[chain[bar]];
     if (!bank) continue;
     const barStart = bar * 16 * sixteenth;
     routing.reverbWet.gain.setValueAtTime(bank.reverbAmount, barStart);
 
-    // Pre-compute glide sources for pitched slots in this bank
+    // When the bank changes, re-apply per-slot params at the bar boundary so
+    // bank-A and bank-B with different drives/volumes both sound right.
+    if (bank !== activeBank) {
+      activeBank = bank;
+      for (let i = 0; i < SLOT_COUNT; i++) {
+        const s = bank.slots[i] || {};
+        try { routing.slotVol[i].gain.setValueAtTime(s.volume ?? 0.85, barStart); } catch {}
+        setSlotDrive(routing, i, s.drive ?? 0);
+        try { routing.slotRevSend[i].gain.setValueAtTime(s.reverbSend ?? 0, barStart); } catch {}
+        try { routing.slotDelSend[i].gain.setValueAtTime(s.delaySend ?? 0, barStart); } catch {}
+      }
+    }
+
     const glideMap = {};
     for (const { slotIdx, slot, glideSource } of iterSlots(bank)) {
       if (glideSource) glideMap[slotIdx] = glideSource;
     }
 
-    // Continuous-voice triggers (vinyl-bed): one per bar, at bar start.
     for (let slotIdx = 0; slotIdx < SLOT_COUNT; slotIdx++) {
       const slot = bank.slots[slotIdx];
       if (!slot?.sound || !isContinuous(slot.sound)) continue;
       maybeTriggerBed(routing, slotIdx, barStart, slot, localSamples, barSec);
+    }
+
+    // Pre-compute which steps the kick fires for sidechain scheduling
+    const kickSteps = new Set();
+    for (let i = 0; i < SLOT_COUNT; i++) {
+      const s = bank.slots[i];
+      if (!s || s.sound !== 'kick' || s.mute) continue;
+      for (let step = 0; step < 16; step++) if (s.pattern[step]?.on) kickSteps.add(step);
     }
 
     for (let step = 0; step < 16; step++) {
@@ -363,10 +605,32 @@ async function renderOffline({ banks, chain, bpm, delayFeedback, delayTime, samp
       const swingDelay = isOff ? (bank.swing / 100) * 0.5 * sixteenth : 0;
       const t = baseTime + swingDelay;
 
+      // Sidechain duck at every kick step
+      if (kickSteps.has(step) && sidechain.amount > 0) {
+        for (const idx of (sidechain.targets || [])) triggerDuck(routing, idx, t, sidechain.amount, 150);
+      }
+
       for (let slotIdx = 0; slotIdx < SLOT_COUNT; slotIdx++) {
         const slot = bank.slots[slotIdx];
         if (!slot?.sound) continue;
-        if (isContinuous(slot.sound)) continue; // handled at bar start
+        if (isContinuous(slot.sound)) continue;
+
+        // Melody-mode notes (scheduled at step 0 of bar)
+        if (slot.melody && Array.isArray(slot.melody) && step === 0) {
+          for (const n of slot.melody) {
+            const p = n.probability ?? 100;
+            if (p < 100 && Math.random() * 100 >= p) continue;
+            const noteStep = (n.step | 0) - 1;
+            if (noteStep < 0 || noteStep > 15) continue;
+            const noteTime = barStart + noteStep * sixteenth;
+            const lengthSec = Math.max(1, (n.length | 0)) * sixteenth;
+            const cell = { on: true, velocity: n.velocity ?? 1, probability: n.probability ?? 100, note: n.pitch ?? slot.defaultNote, __lengthSec: lengthSec };
+            triggerSlot(routing, slotIdx, noteTime, cell, slot, localSamples, barSec);
+            hitCount++;
+          }
+          continue;
+        }
+
         const cell = slot.pattern[step];
         if (!cell?.on) continue;
         const p = cell.probability ?? 100;

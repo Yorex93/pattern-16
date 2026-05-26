@@ -2,6 +2,8 @@ import { Fragment, useState, useEffect, useRef, useCallback } from 'react';
 import { DrumEngine, renderOffline, trimSilentTail, encodeWav, SLOT_COUNT } from './audio-engine.js';
 import { Splash, Knob, MiniSend, VolumeSlider, PlayButton, BPMControl, PitchedStep, PercStep } from './components.jsx';
 import { ImportJsonModal, ExportJsonModal, ShareModal } from './json-modals.jsx';
+import { MixModal } from './mix-modal.jsx';
+import { MelodyEditor } from './melody.jsx';
 import { AI_SYSTEM_PROMPT } from './json-io.js';
 import { readShareFromHash, clearShareHash, decodeShare } from './share.js';
 import {
@@ -30,6 +32,7 @@ function emptySlot(sound = null) {
     mute: false,
     reverbSend: 0,
     delaySend: 0,
+    drive: 0,
   };
   if (sound) {
     if (isPitched(sound)) {
@@ -449,6 +452,9 @@ function App() {
   const [shareOpen, setShareOpen] = useState(false);
   // null | {kind:'loading'} | {kind:'ready', name} | {kind:'failed'} — surfaced on the splash
   const [shareStatus, setShareStatus] = useState(null);
+  // Global mix state: master GLUE + sidechain config. Per-slot drive lives on slot.drive.
+  const [mix, setMix] = useState({ glue: 0.35, sidechain: { amount: 0.5, targets: [0, 1, 2, 3, 4, 5, 6, 7].filter(i => false) } });
+  const [mixOpen, setMixOpen] = useState(false);
 
   // Popover/picker state: {slotIdx, anchor}
   const [palettePopover, setPalettePopover] = useState(null);
@@ -465,18 +471,21 @@ function App() {
   // loaded async from a share URL would be replaced by the stale closure value
   // when the splash gate boots the engine.
   const stateRef = useRef();
-  stateRef.current = { banks, chain, bpm, delayFeedback, delayTime };
+  stateRef.current = { banks, chain, bpm, delayFeedback, delayTime, mix };
 
   const start = useCallback(() => {
     if (!engineRef.current) {
       const s = stateRef.current;
       const eng = new DrumEngine();
+      eng.setBanks(s.banks);
+      eng.setMix(s.mix);
       eng.init();
       eng.setBanks(s.banks);
       eng.setChain(s.chain);
       eng.setBPM(s.bpm);
       eng.setDelayFeedback(s.delayFeedback);
       eng.setDelayTime(s.delayTime);
+      eng.setMix(s.mix);
       engineRef.current = eng;
     }
     setStarted(true);
@@ -487,6 +496,7 @@ function App() {
   useEffect(() => { engineRef.current?.setBPM(bpm); }, [bpm]);
   useEffect(() => { engineRef.current?.setDelayFeedback(delayFeedback); }, [delayFeedback]);
   useEffect(() => { engineRef.current?.setDelayTime(delayTime); }, [delayTime]);
+  useEffect(() => { engineRef.current?.setMix(mix); }, [mix]);
 
   // Apply a successfully-decoded shared pattern to the live state. Pulled out
   // so we can call it both on initial mount and on `hashchange` events (when a
@@ -500,6 +510,7 @@ function App() {
     setPatternName(value.name);
     setCurrentKit(value.kit ?? null);
     setKitModified(false);
+    if (value.mix) setMix(value.mix);
     const firstPresent = value.bankPresent.findIndex(Boolean);
     setEditBank(firstPresent >= 0 ? firstPresent : 0);
     setActivePreset(null);
@@ -669,6 +680,21 @@ function App() {
   const toggleSlotMute = (slotIdx) => updateSlot(slotIdx, s => ({ ...s, mute: !s.mute }));
   const setSlotRevSend = (slotIdx, v) => updateSlot(slotIdx, s => ({ ...s, reverbSend: v }));
   const setSlotDelSend = (slotIdx, v) => updateSlot(slotIdx, s => ({ ...s, delaySend: v }));
+  const setSlotDrive = (slotIdx, v) => updateSlot(slotIdx, s => ({ ...s, drive: v }));
+  // Toggle the slot between grid mode (cell-per-step) and melody mode (piano roll).
+  // On the first switch into melody, seed an empty array so the engine knows
+  // to use melody scheduling.
+  const toggleSlotMelody = (slotIdx) => {
+    updateSlot(slotIdx, s => {
+      if (s.melody) {
+        const { melody, ...rest } = s;
+        return rest;
+      }
+      return { ...s, melody: [] };
+    });
+  };
+  const setSlotMelody = (slotIdx, melody) => updateSlot(slotIdx, s => ({ ...s, melody }));
+  const setSlotMelKey = (slotIdx, key) => updateSlot(slotIdx, s => ({ ...s, melodyKey: key }));
   const setBankReverbAmount = (v) => updateEditBank(b => ({ ...b, reverbAmount: v }));
   const setBankSwing = (v) => updateEditBank(b => ({ ...b, swing: Math.round(Math.max(0, Math.min(66, v))) }));
 
@@ -719,6 +745,10 @@ function App() {
     setKitModified(false);
     setActivePreset(null);
     setKitsPopover(null);
+    // Apply kit's master mix preset on top of existing mix (glue, etc.)
+    if (kit.masterMix) {
+      setMix(prev => ({ ...prev, ...kit.masterMix }));
+    }
     setToast({ kind: 'ok', text: `Loaded kit: ${kit.name}` });
   };
 
@@ -754,7 +784,7 @@ function App() {
     setExporting(true); setExportProgress(0);
     try {
       const { buffer: audioBuffer, musicalDuration } = await renderOffline({
-        banks, chain, bpm, delayFeedback, delayTime,
+        banks, chain, bpm, delayFeedback, delayTime, mix,
         samples: Object.fromEntries(Object.entries(samples).map(([k, v]) => [k, v.buffer])),
         onProgress: setExportProgress,
       });
@@ -786,12 +816,48 @@ function App() {
     const firstPresent = value.bankPresent.findIndex(Boolean);
     setEditBank(firstPresent >= 0 ? firstPresent : 0);
     setActivePreset(null);
-    // Kit hint from the file (display only — slot assignments are authoritative)
     setCurrentKit(value.kit ?? null);
     setKitModified(false);
+    if (value.mix) setMix(value.mix);
     setImportOpen(false);
     const w = warnings?.length ? ` (${warnings.length} warning${warnings.length > 1 ? 's' : ''})` : '';
     setToast({ kind: 'ok', text: `Loaded: ${value.name}${w}` });
+  };
+
+  // ----- AUTO MIX -----
+  const autoMix = () => {
+    // Density: count active steps across edit bank's slots / 128 → 0..1
+    const b = banks[editBank];
+    let active = 0;
+    for (const s of b.slots) for (const c of s.pattern) if (c.on) active++;
+    const density = Math.min(1, active / 128);
+    const newGlue = 0.35 + density * 0.1; // 0.35–0.45
+
+    // Sidechain targets: every slot whose sound is bass or tonal-pitched, if a kick exists
+    const hasKick = b.slots.some(s => s.sound === 'kick');
+    const targets = [];
+    if (hasKick) {
+      for (let i = 0; i < SLOT_COUNT; i++) {
+        const s = b.slots[i];
+        if (!s?.sound) continue;
+        const m = PALETTE[s.sound];
+        if (!m) continue;
+        if (m.category === 'bass' || (m.category === 'tonal' && m.pitched)) targets.push(i);
+      }
+    }
+    setMix({ glue: Math.min(0.5, newGlue), sidechain: { amount: 0.5, targets } });
+
+    // Add drive to synth kick + snare (skip if user has a sample uploaded)
+    updateEditBank(bb => ({
+      ...bb,
+      slots: bb.slots.map((s, i) => {
+        if (samples[i]) return s; // sample slot — leave alone
+        if (s.sound === 'kick' || s.sound === 'snare') return { ...s, drive: Math.max(s.drive ?? 0, 0.2) };
+        return s;
+      }),
+    }));
+    setToast({ kind: 'ok', text: 'Auto-mix applied.' });
+    setMixOpen(false);
   };
 
   const copyAiPrompt = async () => {
@@ -868,6 +934,10 @@ function App() {
               <button className="json-cluster-btn ai" onClick={copyAiPrompt} title="Copy AI system prompt to clipboard">AI</button>
             </div>
           </div>
+          <button className="mix-btn" onClick={() => setMixOpen(true)} title="Master mix: GLUE, sidechain, AUTO MIX">
+            <span className="mix-btn-dot" />
+            <span>MIX</span>
+          </button>
         </div>
 
         <div className="transport-right">
@@ -959,6 +1029,7 @@ function App() {
                   <div className="row-sends">
                     <MiniSend value={slot.reverbSend} onChange={(v) => setSlotRevSend(ri, v)} letter="R" color="rev" />
                     <MiniSend value={slot.delaySend} onChange={(v) => setSlotDelSend(ri, v)} letter="D" color="del" />
+                    <MiniSend value={slot.drive ?? 0} onChange={(v) => setSlotDrive(ri, v)} letter="X" color="drv" />
                   </div>
                   <button
                     className={`slot-gear ${(slot.glide || hasChord(slot.sound) || hasFilter(slot.sound) || tunableValues(slot.sound)) ? 'has' : ''}`}
@@ -966,12 +1037,28 @@ function App() {
                     title="Slot settings"
                     aria-label="Slot settings"
                   >·</button>
+                  {pitched && (
+                    <button
+                      className={`mel-btn ${slot.melody ? 'on' : ''}`}
+                      onClick={() => toggleSlotMelody(ri)}
+                      title={slot.melody ? 'Switch back to grid mode' : 'Switch to melody (piano-roll) mode'}
+                    >MEL</button>
+                  )}
                   <button
                     className={`mute ${slot.mute ? 'on' : ''}`}
                     onClick={() => toggleSlotMute(ri)}
                     aria-label="Mute"
                   >M</button>
                 </div>
+                {pitched && slot.melody ? (
+                  <MelodyEditor
+                    slot={slot}
+                    slotIdx={ri}
+                    currentStep={playState.step}
+                    onChange={(melody) => setSlotMelody(ri, melody)}
+                    onMelKey={(k) => setSlotMelKey(ri, k)}
+                  />
+                ) : (
                 <div className="steps">
                   {slot.pattern.map((cell, si) => (
                     <Fragment key={si}>
@@ -1008,6 +1095,7 @@ function App() {
                     </Fragment>
                   ))}
                 </div>
+                )}
               </div>
             );
           })}
@@ -1098,17 +1186,26 @@ function App() {
       )}
       {exportJsonOpen && (
         <ExportJsonModal
-          state={{ name: patternName, bpm, banks, chain, delayTime, delayFeedback, editBank, kit: currentKit }}
+          state={{ name: patternName, bpm, banks, chain, delayTime, delayFeedback, editBank, kit: currentKit, mix }}
           onClose={() => setExportJsonOpen(false)}
           onToast={(text) => setToast({ kind: 'ok', text })}
         />
       )}
       {shareOpen && (
         <ShareModal
-          state={{ name: patternName, bpm, banks, chain, delayTime, delayFeedback, editBank, kit: currentKit }}
+          state={{ name: patternName, bpm, banks, chain, delayTime, delayFeedback, editBank, kit: currentKit, mix }}
           onClose={() => setShareOpen(false)}
           onToast={(text) => setToast({ kind: 'ok', text })}
           onNameChange={(n) => setPatternName(n)}
+        />
+      )}
+      {mixOpen && (
+        <MixModal
+          mix={mix}
+          slots={bank.slots}
+          onChange={setMix}
+          onAutoMix={autoMix}
+          onClose={() => setMixOpen(false)}
         />
       )}
       <Toast message={toast} onClose={() => setToast(null)} />
