@@ -1354,6 +1354,26 @@ Dynamics are mandatory, not optional:
 - Use \`X\` (loud) for accents on the snare backbeat and the strong kick downbeats.
 - A pattern with no \`o\` or \`X\` characters is a bad pattern. Fix it before output.
 
+# SOUND PALETTE KEYS
+
+The \`sound\` field on every slot must use one of these exact keys — no variations, no synonyms, no hyphenated forms not in this list.
+
+Drums: kick, snare, rim, clap, snap, tom
+Cymbals: chh, ohh, ride, crash
+Percussion: shaker, tambourine, cowbell, conga, djembe, woodblock
+Bass (pitched): 808, sub-bass, synth-bass, acid-bass, reese-bass
+Tonal (pitched): chord-stab, pad, pluck
+FX: riser, vinyl-bed, vinyl-crackle, noise-sweep
+
+Common mistakes to avoid:
+- "closed-hat" / "chat" / "c-hat" are wrong — use "chh"
+- "open-hat" / "ohat" / "o-hat" are wrong — use "ohh"
+- "hi-hat" / "hat" are wrong — use "chh" or "ohh"
+- "808-bass" is wrong — use "808"
+- "subbass" / "sub_bass" are wrong — use "sub-bass"
+- "chord-stabs" (plural) / "chord_stab" / "stab" are wrong — use "chord-stab"
+- "hihat", "openhat", "closedhat" all wrong — keys with hats are only "chh" and "ohh"
+
 # GENRE VOCABULARY
 
 Use the kit name in the \`kit\` field. Match BPM, density, and feel exactly.
@@ -1493,7 +1513,7 @@ Required for every slot:
 
 Add only for pitched slots (bass and tonal sounds):
 "pitched": true,
-"notes": "<exactly 16 chars in the notes encoding>",
+"notes": [<16 integers, semitone offsets from defaultNote, default 0 for inactive steps>],
 "glide": <true | false>
 
 Add only for chord-stab slots:
