@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { Fragment, useMemo } from 'react';
 
 // Piano-roll editor for a single pitched slot. Replaces the normal 16-step grid
 // in that row when MEL mode is active. 24 semitones tall × 16 steps wide.
@@ -149,10 +149,10 @@ export function MelodyEditor({ slot, slotIdx, currentStep, onChange, onMelKey })
         </label>
       </div>
       <div className="melody-grid">
-        {rows.map(({ pitch, isBlack, isRoot, isInScale }) => (
-          <div key={pitch} className={`melody-row ${isBlack ? 'black' : ''} ${isRoot ? 'root' : ''} ${!isInScale ? 'oos' : ''}`}>
-            <div className="melody-label" title={noteLabel(pitch)}>{noteLabel(pitch)}</div>
-            <div className="melody-cells">
+        {rows.map(({ pitch, isBlack, isRoot, isInScale, semi }) => {
+          const isC = semi === 0; // octave boundary
+          return (
+            <div key={pitch} className={`melody-row ${isBlack ? 'black' : ''} ${isRoot ? 'root' : ''} ${!isInScale ? 'oos' : ''} ${isC ? 'octave' : ''}`}>
               {Array.from({ length: 16 }, (_, s) => {
                 const step = s + 1;
                 const spans = noteSpansAt[`${step}|${pitch}`];
@@ -164,18 +164,22 @@ export function MelodyEditor({ slot, slotIdx, currentStep, onChange, onMelKey })
                 const prob = note?.probability ?? 100;
                 const cur = currentStep === s;
                 return (
-                  <button
-                    key={s}
-                    className={`melody-cell ${has ? 'on' : ''} ${has ? `v${vel}` : ''} ${isHead ? 'head' : ''} ${cur ? 'current' : ''} ${s % 4 === 0 ? 'downbeat' : ''} ${prob < 100 ? 'prob' : ''}`}
-                    onClick={(e) => handleCellClick(step, pitch, e)}
-                    onContextMenu={(e) => { e.preventDefault(); handleCellClick(step, pitch, { ...e, shiftKey: true }); }}
-                    title={has ? `${noteLabel(pitch)} · ${['SOFT','MED','LOUD'][vel]} · ${prob}%` : `${noteLabel(pitch)} · step ${step}`}
-                  />
+                  <Fragment key={s}>
+                    <button
+                      className={`step melody-cell ${has ? 'on' : ''} ${has ? `v${vel}` : ''} ${isHead ? 'head' : ''} ${cur ? 'current' : ''} ${s % 4 === 0 ? 'downbeat' : ''} ${prob < 100 ? 'prob' : ''}`}
+                      onClick={(e) => handleCellClick(step, pitch, e)}
+                      onContextMenu={(e) => { e.preventDefault(); handleCellClick(step, pitch, { ...e, shiftKey: true }); }}
+                      title={has ? `${noteLabel(pitch)} · ${['SOFT','MED','LOUD'][vel]} · ${prob}%` : `${noteLabel(pitch)} · step ${step}`}
+                    >
+                      {s === 0 && <span className="melody-cell-label">{noteLabel(pitch)}</span>}
+                    </button>
+                    {s % 4 === 3 && s < 15 && <span className="step-gap" />}
+                  </Fragment>
                 );
               })}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <div className="melody-hint">CLICK: PLACE/REMOVE · SHIFT-CLICK: VELOCITY · ALT-CLICK: PROBABILITY</div>
     </div>

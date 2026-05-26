@@ -799,18 +799,20 @@
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), 0 0 8px oklch(0.55 0.13 295 / 0.4);
   }
 
-  /* Melody editor (piano roll) */
+  /* Melody editor (piano roll) — uses the same column flex as the regular .steps
+     grid so cells align vertically with non-melody rows in the same bank. */
   .melody-editor {
     display: flex; flex-direction: column;
     background: linear-gradient(180deg, #0f0c08, #0a0807);
     border: 1px solid var(--line);
     border-radius: 6px;
-    padding: 6px 8px;
+    padding: 6px 0 6px 0;
   }
   .melody-header {
     display: flex; justify-content: space-between; align-items: center;
     font-size: 9px; letter-spacing: 0.2em; color: var(--ink-faint);
     margin-bottom: 4px;
+    padding: 0 8px;
   }
   .melody-title { color: oklch(0.85 0.14 295); }
   .melody-poly { color: var(--ink-dim); margin-left: 4px; }
@@ -820,42 +822,62 @@
     border: 1px solid var(--line); border-radius: 4px;
     font-size: 10px; padding: 2px 4px;
   }
-  .melody-grid { display: flex; flex-direction: column; gap: 0; }
-  .melody-row { display: flex; align-items: center; gap: 4px; }
-  .melody-label {
-    width: 32px; flex-shrink: 0;
-    font-size: 9px; color: var(--ink-faint);
-    font-family: "JetBrains Mono", ui-monospace, monospace;
-    text-align: right;
-    padding-right: 4px;
+  .melody-grid { display: flex; flex-direction: column; gap: 0; padding: 0; }
+  /* Match the regular .steps row layout exactly so cells align column-for-column */
+  .melody-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 6px 0 0;
+    border-top: 1px solid transparent;
   }
-  .melody-row.root .melody-label { color: var(--accent); font-weight: 700; }
-  .melody-row.black { background: rgba(0,0,0,0.25); }
-  .melody-row.oos .melody-label { opacity: 0.4; }
-  .melody-cells { display: flex; gap: 2px; flex: 1; padding: 1px 0; }
-  .melody-cell {
-    flex: 1;
-    height: 11px;
+  .melody-row.black { background: rgba(0,0,0,0.32); }
+  .melody-row.octave { border-top-color: var(--line-2); }
+  .melody-row.root { background: oklch(0.78 0.16 65 / 0.06); }
+  .melody-row.root.black { background: oklch(0.78 0.16 65 / 0.10); }
+  .melody-row.oos { opacity: 0.7; }
+  .melody-row .step.melody-cell {
+    /* override .step's square aspect-ratio — melody rows are short bars */
+    aspect-ratio: auto;
+    height: 12px;
+    max-width: 56px;
+    border-radius: 2px;
     background: linear-gradient(180deg, #1c1812, #110d09);
     border: 1px solid var(--line);
-    border-radius: 2px;
     padding: 0;
+    position: relative;
     cursor: pointer;
     transition: background 0.08s, border-color 0.08s;
   }
-  .melody-cell:hover { border-color: #5a4d3f; }
-  .melody-cell.downbeat { border-left-color: var(--line-2); }
-  .melody-cell.current { background: linear-gradient(180deg, #2a2018, #1a130d); border-color: oklch(0.6 0.14 60); }
-  .melody-cell.on {
+  .melody-row .step.melody-cell:hover { border-color: #5a4d3f; }
+  .melody-row .step.melody-cell.downbeat { border-left-color: var(--line-2); }
+  .melody-row .step.melody-cell.current { background: linear-gradient(180deg, #2a2018, #1a130d); border-color: oklch(0.6 0.14 60); }
+  .melody-row .step.melody-cell.on {
     background: linear-gradient(180deg, oklch(0.85 0.14 295), oklch(0.6 0.16 285));
     border-color: oklch(0.5 0.12 285);
     box-shadow: 0 0 6px oklch(0.6 0.14 290 / 0.5), inset 0 1px 0 rgba(255,255,255,0.3);
   }
-  .melody-cell.on.v0 { background: linear-gradient(180deg, oklch(0.7 0.10 295), oklch(0.5 0.12 285)); }
-  .melody-cell.on.v2 { background: linear-gradient(180deg, oklch(0.92 0.16 295), oklch(0.72 0.18 285)); box-shadow: 0 0 12px oklch(0.7 0.16 290 / 0.7), inset 0 1px 0 rgba(255,255,255,0.4); }
-  .melody-cell.on.prob { opacity: 0.75; }
+  .melody-row .step.melody-cell.on.v0 { background: linear-gradient(180deg, oklch(0.7 0.10 295), oklch(0.5 0.12 285)); }
+  .melody-row .step.melody-cell.on.v2 { background: linear-gradient(180deg, oklch(0.92 0.16 295), oklch(0.72 0.18 285)); box-shadow: 0 0 12px oklch(0.7 0.16 290 / 0.7), inset 0 1px 0 rgba(255,255,255,0.4); }
+  .melody-row .step.melody-cell.on.prob { opacity: 0.75; }
+  /* Tiny note-name overlay on the first cell of each row, doesn't affect layout */
+  .melody-cell-label {
+    position: absolute;
+    left: 2px; top: 50%;
+    transform: translateY(-50%);
+    font-size: 7px;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    color: var(--ink-faint);
+    pointer-events: none;
+    letter-spacing: 0;
+    line-height: 1;
+  }
+  .melody-row.root .melody-cell-label { color: var(--accent); font-weight: 700; }
+  .melody-row.oos .melody-cell-label { opacity: 0.5; }
+  .melody-row .step.melody-cell.on .melody-cell-label { color: rgba(255,255,255,0.7); }
   .melody-hint {
     margin-top: 6px;
+    padding: 0 8px;
     font-size: 8px; letter-spacing: 0.15em; color: var(--ink-faint); opacity: 0.7;
     text-align: center;
   }
