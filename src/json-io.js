@@ -1288,7 +1288,7 @@ If using any bass or tonal slot:
 # SCHEMA
 
 {
-  "version": 3,
+  "version": 4,
   "name": "<short descriptive name>",
   "kit": "<kit name from genre vocabulary>",
   "bpm": <number, within genre range>,
