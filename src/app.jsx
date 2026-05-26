@@ -777,6 +777,7 @@ function App() {
       </div>
 
       <div className="transport">
+       <div className="transport-top">
         <div className="transport-left">
           <PlayButton playing={playing} onClick={togglePlay} />
           <button
@@ -807,55 +808,6 @@ function App() {
           </div>
         </div>
 
-        <div className="transport-center">
-          <div className="ctl-band">
-            <BankBar
-              banks={banks}
-              editBank={editBank}
-              playingBank={playingBankIdx}
-              isPlaying={playing}
-              onSelect={selectBank}
-            />
-            <ChainEditor
-              chain={chain}
-              setChain={setChain}
-              playingChainIdx={playState.chainIdx}
-              isPlaying={playing}
-            />
-            <div className="kits-panel">
-              <div className="band-label">KITS <span className="band-sub">{currentKit ? `→ ${getKit(currentKit)?.name ?? currentKit}${kitModified ? ' (MOD)' : ''}` : ''}</span></div>
-              <button
-                className={`kit-button ${currentKit && !kitModified ? 'on' : ''}`}
-                onClick={(e) => setKitsPopover({ anchor: e.currentTarget })}
-                title="Load a kit (8 curated sounds; preserves your pattern)"
-              >
-                <span className="preset-led" />
-                {currentKit ? (getKit(currentKit)?.name ?? 'CUSTOM') : 'CHOOSE KIT…'}
-                <span className="kit-chevron">▾</span>
-              </button>
-            </div>
-            <div className="presets-panel">
-              <div className="band-label">PATTERNS <span className="band-sub">→ BANK {BANK_LETTERS[editBank]}</span></div>
-              <div className="presets-row">
-                {Object.keys(PRESETS).map(name => (
-                  <button
-                    key={name}
-                    className={`preset ${activePreset === name ? 'active' : ''}`}
-                    onClick={() => applyPreset(name)}
-                  >
-                    <span className="preset-led"/>
-                    {name}
-                  </button>
-                ))}
-                <button className="preset clear" onClick={clearEditBank}>
-                  <span className="preset-led"/>
-                  CLEAR
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <div className="transport-right">
           <SendsPanel
             swing={bank.swing}
@@ -868,6 +820,54 @@ function App() {
             setDelayTime={setDelayTime}
           />
         </div>
+       </div>
+
+       <div className="transport-bottom">
+        <BankBar
+          banks={banks}
+          editBank={editBank}
+          playingBank={playingBankIdx}
+          isPlaying={playing}
+          onSelect={selectBank}
+        />
+        <ChainEditor
+          chain={chain}
+          setChain={setChain}
+          playingChainIdx={playState.chainIdx}
+          isPlaying={playing}
+        />
+        <div className="kits-panel">
+          <div className="band-label">KIT</div>
+          <button
+            className={`kit-button ${currentKit && !kitModified ? 'on' : ''}`}
+            onClick={(e) => setKitsPopover({ anchor: e.currentTarget })}
+            title="Load a kit (8 curated sounds; preserves your pattern)"
+          >
+            <span className="preset-led" />
+            <span className="kit-button-label">{currentKit ? `${getKit(currentKit)?.name ?? 'CUSTOM'}${kitModified ? ' *' : ''}` : 'CHOOSE…'}</span>
+            <span className="kit-chevron">▾</span>
+          </button>
+        </div>
+        <div className="presets-panel">
+          <div className="band-label">PATTERNS <span className="band-sub">→ BANK {BANK_LETTERS[editBank]}</span></div>
+          <div className="presets-row">
+            {Object.keys(PRESETS).map(name => (
+              <button
+                key={name}
+                className={`preset ${activePreset === name ? 'active' : ''}`}
+                onClick={() => applyPreset(name)}
+              >
+                <span className="preset-led"/>
+                {name}
+              </button>
+            ))}
+            <button className="preset clear" onClick={clearEditBank}>
+              <span className="preset-led"/>
+              CLEAR
+            </button>
+          </div>
+        </div>
+       </div>
       </div>
 
       <div className="body">

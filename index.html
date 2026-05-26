@@ -34,6 +34,7 @@
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; background: #060403; color: var(--ink); font-family: "JetBrains Mono", ui-monospace, monospace; min-height: 100vh; }
+  #root { width: 100%; display: flex; justify-content: center; }
   body {
     background:
       radial-gradient(1200px 800px at 50% -10%, rgba(255, 180, 90, 0.04), transparent 60%),
@@ -43,7 +44,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 28px 24px;
+    padding: 14px 4px;
   }
   button { font-family: inherit; cursor: pointer; }
 
@@ -65,7 +66,7 @@
   /* --- Machine shell --- */
   .machine {
     width: 100%;
-    max-width: 1280px;
+    max-width: 1440px;
     background: linear-gradient(180deg, #1f1a14 0%, #15110d 100%);
     border-radius: 14px;
     border: 1px solid #0a0807;
@@ -101,20 +102,34 @@
   .screws span { width: 10px; height: 10px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #4a3f33, #1a140e 70%); box-shadow: inset 0 0 0 1px #0a0805, 0 1px 0 rgba(255,255,255,0.05); position: relative; }
   .screws span::after { content: ''; position: absolute; inset: 3px; border-top: 1px solid rgba(255,255,255,0.1); transform: rotate(28deg); }
 
-  /* --- Transport --- */
+  /* --- Transport (2-row layout: top has playback+modulation, bottom is the
+     full-width selection strip for banks/chain/kit/patterns) --- */
   .transport {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    gap: 20px;
-    align-items: stretch;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
     background: linear-gradient(180deg, #15110d, #100c09);
     border: 1px solid var(--panel-edge);
     border-radius: 10px;
     padding: 14px 18px;
     box-shadow: var(--shadow-inset);
   }
+  .transport-top {
+    display: flex;
+    align-items: stretch;
+    gap: 20px;
+    flex-wrap: wrap;
+    justify-content: space-between;
+  }
+  .transport-bottom {
+    display: flex;
+    align-items: flex-end;
+    gap: 22px;
+    flex-wrap: wrap;
+    padding-top: 12px;
+    border-top: 1px dashed rgba(60, 50, 40, 0.4);
+  }
   .transport-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .transport-center { display: flex; justify-content: center; align-items: center; min-width: 0; overflow: hidden; }
   .transport-right { display: flex; align-items: stretch; gap: 14px; }
 
   /* Play button */
@@ -175,19 +190,9 @@
   .meter-label { font-size: 9px; letter-spacing: 0.3em; color: var(--ink-faint); }
   .meter-val { font-family: "Space Grotesk", sans-serif; font-weight: 700; font-size: 22px; color: var(--ink); }
 
-  /* --- Control band (banks / chain / patterns) — stack vertically so each
-     section gets the full center-column width without overflowing into the
-     modulation panel on tighter screens. --- */
-  .ctl-band {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    min-width: 0;
-  }
-  .bankbar, .chain, .presets-panel { min-width: 0; max-width: 100%; }
-  .chain-cells, .presets-row, .bankbar-row { flex-wrap: wrap; justify-content: center; }
+  /* Selection sections share the transport-bottom row and align by their controls */
+  .bankbar, .chain, .presets-panel, .kits-panel { min-width: 0; }
+  .chain-cells, .presets-row, .bankbar-row { flex-wrap: wrap; }
   .band-label { font-size: 9px; letter-spacing: 0.3em; color: var(--ink-faint); margin-bottom: 6px; display: flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; }
   .band-sub { color: var(--accent); opacity: 0.7; letter-spacing: 0.18em; }
 
@@ -240,8 +245,8 @@
   .chain-cell {
     width: 26px; height: 30px;
     border-radius: 5px;
-    background: linear-gradient(180deg, #15110d, #0e0b08);
-    border: 1px solid var(--line);
+    background: linear-gradient(180deg, #1c1812, #110d09);
+    border: 1px solid #5a4d3f;
     color: var(--ink);
     display: grid; place-items: center;
     font-family: "Space Grotesk", sans-serif;
@@ -250,9 +255,10 @@
     transition: all 0.12s;
     position: relative;
   }
-  .chain-cell:hover { border-color: var(--line-2); transform: translateY(-1px); }
+  .chain-cell:hover { border-color: #7a6a55; transform: translateY(-1px); }
   .chain-cell.empty { color: var(--ink-faint); }
-  .chain-cell.pad { opacity: 0.35; background: #0c0907; cursor: not-allowed; }
+  .chain-cell.pad { opacity: 1; background: #15110d; cursor: not-allowed; border-color: #4a3f33; }
+  .chain-cell.pad .chain-dash { color: #6a5d4d; opacity: 1; }
   .chain-cell.add { color: var(--ink-faint); border-style: dashed; }
   .chain-cell.add:hover { color: var(--accent); border-color: var(--accent); border-style: solid; }
   .chain-add { font-size: 16px; line-height: 1; font-weight: 400; }
@@ -268,19 +274,18 @@
   /* Kits */
   .kits-panel { display: flex; flex-direction: column; }
   .kit-button {
-    display: inline-flex; align-items: center; gap: 8px;
+    display: inline-flex; align-items: center; gap: 6px;
     height: 30px;
-    padding: 0 14px;
+    padding: 0 10px;
     background: linear-gradient(180deg, #1c1812, #14100c);
     border: 1px solid var(--line);
     color: var(--ink-dim);
     border-radius: 6px;
-    font-size: 10px; font-weight: 700; letter-spacing: 0.18em;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.14em;
     box-shadow: var(--shadow-inset);
     transition: all 0.15s;
-    min-width: 160px;
-    justify-content: space-between;
   }
+  .kit-button-label { white-space: nowrap; }
   .kit-button:hover { color: var(--ink); border-color: var(--line-2); transform: translateY(-1px); }
   .kit-button.on {
     color: var(--accent); border-color: oklch(0.55 0.14 60);
@@ -561,7 +566,7 @@
   .step {
     flex: 1;
     aspect-ratio: 1 / 1;
-    max-width: 46px;
+    max-width: 56px;
     background: transparent;
     border: none;
     padding: 0;
@@ -909,7 +914,7 @@
   .col-strip-steps { display: flex; align-items: center; gap: 6px; padding: 0 6px 0 0; }
   .col-num {
     flex: 1;
-    max-width: 46px;
+    max-width: 56px;
     text-align: center;
     font-size: 10px;
     color: var(--ink-faint);
@@ -1164,7 +1169,7 @@
   }
 
   /* Responsive */
-  @media (max-width: 1280px) {
+  @media (max-width: 1440px) {
     .row { grid-template-columns: 340px 1fr; }
     .col-strip { grid-template-columns: 340px 1fr; }
   }
@@ -1180,6 +1185,7 @@
     .row { grid-template-columns: 1fr; }
     .col-strip { grid-template-columns: 1fr; }
     .col-strip-left { display: none; }
+     .rows { gap: 20px; }
   }
 </style>
 </head>
