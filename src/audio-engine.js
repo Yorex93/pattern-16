@@ -57,9 +57,15 @@ function makeDest(routing, slotIdx, velGain) {
 
 // ---------- Mix-chain helpers (master GLUE) ----------
 function makeSaturationCurve(amount) {
-  // amount in 0..1. Higher = more harmonic content + soft clipping.
+  // amount in 0..1. At 0 we return a true identity curve so the saturator is
+  // genuinely bypassed (tanh with small k still shaves peaks audibly, which
+  // was making bass-heavy content sound distorted even at glue=0).
   const N = 4096;
   const curve = new Float32Array(N);
+  if (amount <= 0.0001) {
+    for (let i = 0; i < N; i++) curve[i] = (i / (N - 1)) * 2 - 1;
+    return curve;
+  }
   const k = 1 + amount * 10;
   const norm = Math.tanh(k);
   for (let i = 0; i < N; i++) {
@@ -70,15 +76,15 @@ function makeSaturationCurve(amount) {
 }
 
 // Apply a unified GLUE (0..1) across compressor + saturator. Limiter is always
-// on regardless. Tasteful curve: 0 → near-bypass; 0.35 → mix "snap"; 0.7 →
-// audible harmonics; 1 → distorted.
+// on regardless. At g=0 the chain is genuinely transparent (compressor
+// threshold above signal peaks, saturator identity). Higher g engages both.
 function applyGlue(routing, glue) {
   routing.glue = glue;
   const g = Math.max(0, Math.min(1, glue));
-  // Compressor threshold: -3 dB (gentle) → -22 dB (heavy bus pump)
-  if (routing.compressor) routing.compressor.threshold.value = -3 - g * 19;
-  // Saturator drive scales nonlinearly so subtle settings stay clean
-  if (routing.saturator) routing.saturator.curve = makeSaturationCurve(g * 0.55);
+  // Compressor threshold: 0 dB (effectively bypassed) → -18 dB (heavy pump)
+  if (routing.compressor) routing.compressor.threshold.value = 0 - g * 18;
+  // Saturator returns identity at g=0; soft clip above.
+  if (routing.saturator) routing.saturator.curve = makeSaturationCurve(g * 0.45);
 }
 
 function setSlotDrive(routing, slotIdx, drive) {
@@ -210,7 +216,7 @@ function buildRouting(ctx, opts) {
     reverbAmount = 0.25,
     delayFeedback = 0.35,
     delayTimeSec = 0.5,
-    glue = 0.35,
+    glue = 0,
     slotVolumes = {},
     slotDrives = {},
     slotRevSends = {},
@@ -219,7 +225,9 @@ function buildRouting(ctx, opts) {
 
   // ---- master GLUE chain ----
   const limiter = ctx.createDynamicsCompressor();
-  limiter.threshold.value = -0.3;
+  // Looser ceiling (was -0.3 dB) so the limiter only catches the very loudest
+  // peaks instead of riding the entire signal. -1.5 dB leaves audible headroom.
+  limiter.threshold.value = -1.5;
   limiter.knee.value = 0;
   limiter.ratio.value = 20;
   limiter.attack.value = 0.001;
@@ -240,7 +248,10 @@ function buildRouting(ctx, opts) {
 
   // Master sum node — all sources merge here pre-glue
   const master = ctx.createGain();
-  master.gain.value = 0.85;
+  // Conservative master gain so the sum of all 8 slots + sends has real
+  // headroom. Previous value (0.85, then 0.55) was still slamming the
+  // limiter on bass-heavy content.
+  master.gain.value = 0.45;
   master.connect(compressor);
 
   // ---- persistent per-slot chain ----
@@ -334,7 +345,7 @@ class DrumEngine {
     this.chain = [0];
     this.samples = {};
     // Mix is global: glue knob + sidechain depth + per-slot target list (idx 0..7)
-    this.mix = { glue: 0.35, sidechain: { amount: 0.5, targets: [] } };
+    this.mix = { glue: 0, sidechain: { amount: 0.5, targets: [] } };
     this.isPlaying = false;
     this.currentStep = 0;
     this.chainIdx = 0;

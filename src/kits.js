@@ -56,7 +56,7 @@ export const KITS = [
       7: { reverbSend: 0.35 },
     },
     config: { 6: { glide: true } },
-    masterMix: { glue: 0.45 },
+    // masterMix.glue intentionally not set — let the user opt in via MIX panel.
   },
   {
     id: 'lo-fi',
@@ -74,7 +74,7 @@ export const KITS = [
       7: { reverbSend: 0.5, drive: 0.2 },
     },
     config: { 6: { chordType: 'maj7' }, 7: { chordType: 'maj7' } },
-    masterMix: { glue: 0.4 },
+    // masterMix.glue intentionally not set — let the user opt in via MIX panel.
   },
   {
     id: 'acid-house',
@@ -87,7 +87,7 @@ export const KITS = [
       7: { reverbSend: 0.25 },
     },
     config: { 6: { glide: true }, 7: { chordType: 'minor' } },
-    masterMix: { glue: 0.4 },
+    // masterMix.glue intentionally not set — let the user opt in via MIX panel.
   },
   {
     id: 'jungle-dnb',

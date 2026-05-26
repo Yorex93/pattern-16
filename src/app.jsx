@@ -603,7 +603,7 @@ function App() {
   // Initial targets are derived from the initial bank's bass/tonal slots so the
   // feature is discoverable on first run (BOOM-BAP starts with 808 in slot 8).
   const [mix, setMix] = useState(() => ({
-    glue: 0.35,
+    glue: 0,
     sidechain: { amount: 0.5, targets: deriveSidechainTargets(bankFromPreset('BOOM-BAP').slots) },
   }));
   const [mixOpen, setMixOpen] = useState(false);

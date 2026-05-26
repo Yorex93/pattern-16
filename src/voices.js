@@ -37,7 +37,7 @@ function triggerKick(ctx, time, velocity, dest) {
   osc.frequency.setValueAtTime(loud ? 175 : (soft ? 140 : 155), time);
   osc.frequency.exponentialRampToValueAtTime(loud ? 40 : (soft ? 48 : 42), time + (loud ? 0.07 : 0.08));
   gain.gain.setValueAtTime(0.0001, time);
-  gain.gain.exponentialRampToValueAtTime(1.0, time + 0.003);
+  gain.gain.exponentialRampToValueAtTime(0.8, time + 0.003);
   gain.gain.exponentialRampToValueAtTime(0.0001, time + (loud ? 0.5 : soft ? 0.38 : 0.45));
   osc.connect(gain).connect(dest);
   osc.start(time); osc.stop(time + 0.55);
@@ -361,7 +361,7 @@ function trigger808(ctx, time, velocity, dest, opts = {}) {
   // Decay scales with note pitch (low notes ring longer), as before.
   const decay = Math.min(2.0, 0.6 + (60 - note) * 0.03);
   const g = ctx.createGain();
-  const stopAt = applyGatedEnvelope(g.gain, time, 0.95, 0.005, decay, 0.50, 0.200, gateSec);
+  const stopAt = applyGatedEnvelope(g.gain, time, 0.55, 0.005, decay, 0.50, 0.200, gateSec);
   const sat = makeSaturation(ctx, 0.45);
   osc.connect(sat).connect(g).connect(dest);
   osc.start(time); osc.stop(stopAt + 0.05);
@@ -377,7 +377,7 @@ function triggerSubBass(ctx, time, velocity, dest, opts = {}) {
   osc.type = 'sine';
   setPitch(osc, time, note, from);
   const g = ctx.createGain();
-  const stopAt = applyGatedEnvelope(g.gain, time, 1.0, 0.008, 0.250, 0.70, 0.160, gateSec);
+  const stopAt = applyGatedEnvelope(g.gain, time, 0.45, 0.008, 0.250, 0.70, 0.160, gateSec);
   osc.connect(g).connect(dest);
   osc.start(time); osc.stop(stopAt + 0.05);
 }
