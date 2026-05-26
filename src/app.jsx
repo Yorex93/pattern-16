@@ -140,8 +140,10 @@ const PRESETS = {
     swing: 56,
     reverbAmount: 0.32,
     chain: [0, 0, 1, 0],
-    followChord: [false, false, false, false, false, false, false, true],
-    melodyKey: { 7: 'A minor' },
+    // No follow-chord and no 808 pattern by default — boom-bap leaves the 808
+    // slot empty so users discover it. The chord change between banks A and B
+    // is implicit (chord-stab would carry it, but the boom-bap kit doesn't
+    // include one — that's intentional, a clean sparse hip-hop palette).
     banks: [
       {
         chord: { root: 'A', type: 'm7' },
@@ -153,14 +155,11 @@ const PRESETS = {
           row(['.','.',[1,75],'.', '.','.','.','.', '.','.',[1,75],'.', '.','.','.','.']),
           row([1,'.','.','.', 1,'.','.','.', 1,'.','.','.', 1,'.','.','.']),
           row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']),
-          // 808 root note A2 (45) on beats 1 and 11 — follow-chord transposes
-          // this down a fifth to D2 when bank B (Dm7) plays.
-          row([2,'.','.','.', '.','.','.','.', '.','.',1,'.', '.','.','.','.'], 45),
+          row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']), // 808 empty
         ],
       },
       {
         chord: { root: 'D', type: 'm7' },
-        // Bank B reuses bank A's grooves; only the 808 pitch shifts via follow-chord.
         patterns: [
           row([2,'.','.','.', '.','.',1,'.', 1,'.','.','.', '.','.','.','.']),
           row(['.','.','.','.', 2,'.','.','.', '.','.','.','.', 2,'.','.','.']),
@@ -169,7 +168,7 @@ const PRESETS = {
           row(['.','.',[1,75],'.', '.','.','.','.', '.','.',[1,75],'.', '.','.','.','.']),
           row([1,'.','.','.', 1,'.','.','.', 1,'.','.','.', 1,'.','.','.']),
           row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']),
-          row([2,'.','.','.', '.','.','.','.', '.','.',1,'.', '.','.','.','.'], 45),
+          row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']), // 808 empty
         ],
       },
     ],
@@ -181,8 +180,9 @@ const PRESETS = {
     swing: 0,
     reverbAmount: 0.22,
     chain: [0, 0, 1, 1],
-    followChord: [false, false, false, false, false, false, true, false],
-    melodyKey: { 6: 'F minor' },
+    // 808 left empty by default — the kit places one on slot 7 ready for the
+    // user to place hits. Bank chord labels still mark the progression for
+    // anyone who wants to add a chord-stab or enable the 808 follow-chord.
     banks: [
       {
         chord: { root: 'F', type: 'minor' },
@@ -193,9 +193,7 @@ const PRESETS = {
           row(['.','.','.','.', '.','.','.','.', '.','.',1,'.', '.','.','.','.']),
           row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']),
           row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.',1,'.']),
-          // 808 root F2 (41) with a +5 (Bb) accent — follow-chord drops it to
-          // C2 on bank B (Cm) for the i-V relationship.
-          row([[2,100,0],'.','.','.', '.','.',[1,100,5],'.', '.','.',[1,100,0],'.', '.','.','.','.'], 41),
+          row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']), // 808 empty
           row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']),
         ],
       },
@@ -208,7 +206,7 @@ const PRESETS = {
           row(['.','.','.','.', '.','.','.','.', '.','.',1,'.', '.','.','.','.']),
           row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']),
           row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.',1,'.']),
-          row([[2,100,0],'.','.','.', '.','.',[1,100,5],'.', '.','.',[1,100,0],'.', '.','.','.','.'], 41),
+          row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']), // 808 empty
           row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']),
         ],
       },
