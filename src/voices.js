@@ -1,3 +1,5 @@
+import { CHORD_INTERVALS } from './scales.js';
+
 // Pattern-16 voice library. Each trigger function builds a short-lived graph
 // of nodes that ends at `dest` (a gain already scaled by row volume × velocity
 // and fanned to dry / reverb / delay sends). All envelopes are self-terminating.
@@ -413,14 +415,7 @@ function triggerSynthBass(ctx, time, velocity, dest, opts = {}) {
 }
 
 // ---------------- Tonal ----------------
-
-const CHORD_INTERVALS = {
-  major: [0, 4, 7],
-  minor: [0, 3, 7],
-  sus4:  [0, 5, 7],
-  m7:    [0, 3, 7, 10],
-  maj7:  [0, 4, 7, 11],
-};
+// CHORD_INTERVALS is imported from scales.js (8 chord types in v5).
 
 // Chord stab: detuned saws per chord interval through lowpass. Gated amp envelope:
 //   attack 6ms, decay 140ms to 20% sustain, release 150ms.

@@ -19,7 +19,7 @@ import {
   defaultFilter,
   defaultChord,
 } from "./sounds.js";
-import { MELODY_KEY_NAMES, DEFAULT_MELODY_KEY } from "./scales.js";
+import { MELODY_KEY_NAMES, DEFAULT_MELODY_KEY, VALID_ROOT_NAMES, CHORD_TYPES_V5, ROOT_NAMES_SHARP, NOTE_TO_SEMI } from "./scales.js";
 
 const SLOT_COUNT = 8;
 const BANK_LETTERS = ["A", "B", "C", "D"];
@@ -185,14 +185,14 @@ export function parsePattern(json) {
     });
   } else if (obj.version === 1) {
     return parseV1ThenMigrate(obj);
-  } else if (obj.version !== 2 && obj.version !== 3 && obj.version !== 4) {
-    if (isFiniteNumber(obj.version) && obj.version > 4) {
+  } else if (obj.version !== 2 && obj.version !== 3 && obj.version !== 4 && obj.version !== 5) {
+    if (isFiniteNumber(obj.version) && obj.version > 5) {
       return {
         ok: false,
         errors: [
           {
             path: "version",
-            message: `This file uses schema version ${obj.version}; this app supports version 4.`,
+            message: `This file uses schema version ${obj.version}; this app supports version 5.`,
           },
         ],
         warnings: [],
@@ -200,7 +200,7 @@ export function parsePattern(json) {
     }
     errors.push({
       path: "version",
-      message: "version must equal 4 (or 1/2/3 for migration).",
+      message: "version must equal 5 (or 1/2/3/4 for migration).",
     });
   }
 
@@ -287,7 +287,7 @@ export function parsePattern(json) {
         });
         continue;
       }
-      banks[i] = parseBank(bv, `banks.${L}`, errors, warnings);
+      banks[i] = parseBank(bv, `banks.${L}`, errors, warnings, obj.version);
     }
     for (const k of Object.keys(obj.banks)) {
       if (!BANK_LETTERS.includes(k))
@@ -628,8 +628,13 @@ function applyProb(pattern, str) {
 }
 
 // ---------- v2 bank/slot parser ----------
-function parseBank(bv, base, errors, warnings) {
+function parseBank(bv, base, errors, warnings, version) {
   const out = emptyBankInternal();
+  // v4 banks have no chord field; engine falls back to legacy slot.chordType.
+  // Strip the default chord that emptyBankInternal stamps on, so the parser
+  // never invents one for v4-or-earlier files.
+  if (version < 5) delete out.chord;
+
   if (!bv.slots || typeof bv.slots !== "object" || Array.isArray(bv.slots)) {
     errors.push({
       path: `${base}.slots`,
@@ -659,7 +664,38 @@ function parseBank(bv, base, errors, warnings) {
     }
     out.slots[idx] = parseSlot(v, `${base}.slots.${k}`, errors, warnings);
   }
-  const KNOWN_BANK = new Set(["slots"]);
+
+  // v5: bank chord. Validate root + type independently; either default if missing.
+  if ("chord" in bv && bv.chord != null) {
+    const c = bv.chord;
+    if (typeof c !== "object" || Array.isArray(c)) {
+      errors.push({ path: `${base}.chord`, message: "chord must be an object { root, type }." });
+    } else {
+      const chord = { root: "A", type: "minor" };
+      if ("root" in c) {
+        if (typeof c.root === "string" && VALID_ROOT_NAMES.includes(c.root)) {
+          // Canonicalize to sharp form so duplicate spellings round-trip cleanly.
+          chord.root = ROOT_NAMES_SHARP[NOTE_TO_SEMI[c.root]];
+        } else {
+          errors.push({ path: `${base}.chord.root`, message: `chord.root must be a note name (C..B with optional # or b).` });
+        }
+      }
+      if ("type" in c) {
+        if (typeof c.type === "string" && CHORD_TYPES_V5.includes(c.type)) {
+          chord.type = c.type;
+        } else {
+          errors.push({ path: `${base}.chord.type`, message: `chord.type must be one of: ${CHORD_TYPES_V5.join(", ")}.` });
+        }
+      }
+      out.chord = chord;
+    }
+  } else if (version >= 5) {
+    // v5 file with chord field missing — apply the default so the bank still
+    // has a chord (v5 schema's "default for a new bank" rule).
+    out.chord = { root: "A", type: "minor" };
+  }
+
+  const KNOWN_BANK = new Set(["slots", "chord"]);
   for (const k of Object.keys(bv))
     if (!KNOWN_BANK.has(k))
       warnings.push({
@@ -709,6 +745,13 @@ function parseSlot(v, base, errors, warnings) {
     else errors.push({ path: path("drive"), message: "drive must be 0–1." });
   } else {
     slot.drive = 0;
+  }
+  // v5: per-pitched-slot followChord (optional, default false)
+  if ("followChord" in v && v.followChord != null) {
+    if (typeof v.followChord === "boolean") slot.followChord = v.followChord;
+    else errors.push({ path: path("followChord"), message: "followChord must be a boolean." });
+  } else {
+    slot.followChord = false;
   }
 
   if (typeof v.steps !== "string" || v.steps.length !== 16) {
@@ -793,18 +836,17 @@ function parseSlot(v, base, errors, warnings) {
         melody.push({ step: n.step, pitch: pitchMidi, length, velocity, probability });
       }
       slot.melody = melody;
+    }
 
-      // melodyKey: used by the editor for snap-to-scale. Only meaningful when
-      // the slot is in melody mode; default to the UI's default if missing or invalid.
-      if ("melodyKey" in v) {
-        if (typeof v.melodyKey === "string" && MELODY_KEY_NAMES.includes(v.melodyKey)) {
-          slot.melodyKey = v.melodyKey;
-        } else {
-          errors.push({ path: path("melodyKey"), message: `melodyKey must be one of: ${MELODY_KEY_NAMES.join(", ")}.` });
-          slot.melodyKey = DEFAULT_MELODY_KEY;
-        }
+    // melodyKey: used by the melody editor for snap-to-scale AND by the v5
+    // follow-chord transposition. Parse on any pitched slot, not just melody-
+    // mode ones. Missing field is fine; the engine and editor both fall back
+    // to DEFAULT_MELODY_KEY when undefined.
+    if ("melodyKey" in v) {
+      if (typeof v.melodyKey === "string" && MELODY_KEY_NAMES.includes(v.melodyKey)) {
+        slot.melodyKey = v.melodyKey;
       } else {
-        slot.melodyKey = DEFAULT_MELODY_KEY;
+        errors.push({ path: path("melodyKey"), message: `melodyKey must be one of: ${MELODY_KEY_NAMES.join(", ")}.` });
       }
     }
   }
@@ -866,6 +908,7 @@ function parseSlot(v, base, errors, warnings) {
     "filter",
     "chordType",
     "tunable",
+    "followChord",
     "defaultNote",
   ]);
   for (const k of Object.keys(v))
@@ -894,7 +937,7 @@ export function serializePattern(state) {
   });
 
   const out = {
-    version: 4,
+    version: 5,
     name: (name && name.trim()) || "untitled",
     bpm,
     swing: Math.round(swInt) / 100,
@@ -925,7 +968,12 @@ function bankToJson(b) {
     if (!s || !s.sound) continue;
     slots[String(i + 1)] = slotToJson(s);
   }
-  return { slots };
+  const out = { slots };
+  // v5: emit chord only when defined. v4-vintage banks have no chord.
+  if (b.chord && b.chord.root && b.chord.type) {
+    out.chord = { root: b.chord.root, type: b.chord.type };
+  }
+  return out;
 }
 
 function slotToJson(s) {
@@ -938,6 +986,7 @@ function slotToJson(s) {
     delaySend: round3(s.delaySend),
   };
   if (s.drive && s.drive > 0) out.drive = round3(s.drive);
+  if (isPitched(s.sound) && s.followChord) out.followChord = true;
   // steps + probability strings
   let steps = "",
     prob = "",
@@ -996,7 +1045,11 @@ function slotToJson(s) {
       if (n.probability !== 100) item.probability = n.probability;
       return item;
     });
-    if (s.melodyKey && s.melodyKey !== DEFAULT_MELODY_KEY) out.melodyKey = s.melodyKey;
+  }
+  // v5: melodyKey is meaningful for both melody-mode (snap-to-scale) AND
+  // follow-chord grid-mode slots (transposition reference). Emit when non-default.
+  if (isPitched(s.sound) && s.melodyKey && s.melodyKey !== DEFAULT_MELODY_KEY) {
+    out.melodyKey = s.melodyKey;
   }
   return out;
 }
@@ -1124,6 +1177,29 @@ Now produce a pattern for this request:
 `;
 
 export const AI_SYSTEM_PROMPT = `You are an expert beat producer helping a user design a drum pattern for Pattern-16, a 16-step groovebox. Output a single JSON object matching the schema below. Output JSON only — no commentary, no markdown fences, no explanation before or after.
+
+# v5 ADDITIONS — CHORD PROGRESSIONS (READ THIS FIRST)
+Each non-null bank has a "chord": { "root": <note name>, "type": <chord type> } that drives two things:
+1. Any chord-stab slot in the bank plays this chord automatically. Do NOT write a chord-stab's pitches in melody mode for harmony — just place the slot's hits (steps grid is fine) and the bank chord supplies the voicing.
+2. Pitched slots with "followChord": true transpose every note they play by (bankRoot - slotMelodyKeyRoot) semitones. This turns a single bassline into a progression that moves with the chord changes.
+
+bank chord shape: { "root": "A"|"A#"|"B"|... |"Bb"|"Eb"|... , "type": "major"|"minor"|"maj7"|"m7"|"7"|"sus4"|"dim"|"aug" }
+Root accepts sharp or flat spellings; the canonical output uses sharps (so "Eb" round-trips to "D#").
+
+When to use followChord:
+- Bass slots (808, sub-bass, synth-bass, acid-bass, reese-bass) in chains that span multiple bank chords → YES, set followChord true and write the bassline in bank A's key.
+- Chord-stab / pad / pluck → leave followChord OFF (chord-stab follows automatically; pad/pluck are written in concrete pitches for melodic content).
+- Single-chord patterns (chain is just ["A"]) → leave followChord off; there's nothing to follow.
+
+For follow-chord slots, also set "melodyKey" to the slot's reference key (e.g. "A minor"). The slot's notes are interpreted relative to this key's root, so make sure bank A's chord root MATCHES the melodyKey's root for the bassline to play its written pitches in bank A.
+
+GENRE PROGRESSIONS
+- Boom-bap / lo-fi: i-iv or ii-V-i with maj7/m7 colors. Example: Am7 → Dm7 → G7 → Cmaj7. Slow harmonic rhythm — chain like [A, A, B, A]. Bass follows.
+- House: i-VI or i-iv-V. Example: Am7 → Fmaj7. Chain [A, B, A, B]. Sub-bass follows. Chord-stab IS the lead — make sure both banks have a chord-stab slot.
+- Trap / drill: simple, dark, often i-VII or i-VI. Example: Fm → Cm (i-V), Cm → Ab (i-VI). Chain [A, A, A, B] for a turnaround. 808 follows with glide on.
+- Ambient: slow chord movement, modal or extended. Use all four banks if you want full-bar chord changes — chain [A, B, C, D]. Pad and sub-bass both follow.
+
+RULE: if you write a multi-bank chain, set followChord true on the bass slot. Otherwise the bass plays the same literal notes under every chord (which sounds wrong against changing harmony).
 
 # v4 ADDITIONS (READ THIS BEFORE THE REST)
 - Top-level "mix" object: { "glue": <0-1>, "sidechain": { "amount": <0-1>, "targets": ["1","3",...] } }. Glue is the master bus compressor+saturator+limiter knob. Sidechain ducks the listed slots whenever the kick fires.
@@ -1318,7 +1394,7 @@ If using any bass or tonal slot:
 # SCHEMA
 
 {
-  "version": 4,
+  "version": 5,
   "name": "<short descriptive name>",
   "kit": "<kit name from genre vocabulary>",
   "bpm": <number, within genre range>,
@@ -1329,6 +1405,7 @@ If using any bass or tonal slot:
   },
   "banks": {
     "A": {
+      "chord": { "root": "A", "type": "minor" },        // v5 bank chord
       "slots": {
         "1": { /* slot object, see below */ },
         "2": { /* slot object */ },
@@ -1338,9 +1415,7 @@ If using any bass or tonal slot:
         "6": { /* slot object */ },
         "7": { /* slot object */ },
         "8": { /* slot object */ }
-      },
-      "accents":     { "<slot key>": "<16 chars>" },
-      "probability": { "<slot key>": "<16 chars>" }
+      }
     },
     "B": null,
     "C": null,
@@ -1348,6 +1423,8 @@ If using any bass or tonal slot:
   },
   "chain": ["A"]
 }
+
+slot (pitched): may add "followChord": true and "melodyKey": "A minor" to track the bank chord.
 
 Slot object shape:
 

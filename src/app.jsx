@@ -11,7 +11,8 @@ import {
   isPitched, hasFilter, hasChord, tunableValues, isContinuous, defaultNote, defaultFilter, defaultChord,
   DEFAULT_LOADOUT, noteLabel, shortNoteLabel,
 } from './sounds.js';
-import { PalettePopover, NotePicker, SlotSettingsPopover, KitsPopover } from './slot-ui.jsx';
+import { DEFAULT_BANK_CHORD, chordLabel, ROOT_NAMES_SHARP, CHORD_TYPES_V5 } from './scales.js';
+import { PalettePopover, NotePicker, SlotSettingsPopover, KitsPopover, BankChordPopover } from './slot-ui.jsx';
 import { KITS, getKit } from './kits.js';
 
 const BANK_LETTERS = ['A', 'B', 'C', 'D'];
@@ -52,6 +53,9 @@ function emptyBank(loadout = DEFAULT_LOADOUT) {
     slots: loadout.slice(0, SLOT_COUNT).map(s => emptySlot(s)),
     swing: 0,
     reverbAmount: 0.25,
+    // v5: bank-level chord that the chord-stab voice plays and follow-chord
+    // pitched slots transpose against. New banks get A minor by default.
+    chord: { ...DEFAULT_BANK_CHORD },
   };
 }
 
@@ -124,21 +128,50 @@ function makeSlot(sound, pattern, overrides = {}) {
 // Presets pair a kit (which sets slot sound assignments + mix/config) with a
 // step pattern per slot. Pattern entries follow the row() DSL — pitched slots
 // don't need explicit notes here; the loader fills in the kit's defaultNote.
+// Presets now ship 2-bank chord progressions so harmonic movement is audible
+// on first play. Each bank entry holds a chord + per-slot patterns. The
+// `chain` walks through bank indices (0 = A, 1 = B). `followChord` lists the
+// slot indices where chord-follow should be enabled (typically the bass).
+// `melodyKey` per slot sets the reference key used by follow-chord transposition.
 const PRESETS = {
   'BOOM-BAP': {
     kitId: 'boom-bap',
     bpm: 88,
     swing: 56,
     reverbAmount: 0.32,
-    patterns: [
-      row([2,'.','.','.', '.','.',1,'.', 1,'.','.','.', '.','.','.','.']),       // kick
-      row(['.','.','.','.', 2,'.','.','.', '.','.','.','.', 2,'.','.','.']),     // snare
-      row([1,'.',1,'.', 1,'.',1,'.', 1,'.',1,'.', 1,'.',1,'.']),                  // chh
-      row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.',1,'.']),   // ohh
-      row(['.','.',[1,75],'.', '.','.','.','.', '.','.',[1,75],'.', '.','.','.','.']),     // rim
-      row([1,'.','.','.', 1,'.','.','.', 1,'.','.','.', 1,'.','.','.']),         // ride
-      row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']), // shaker
-      row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']), // 808 (empty so user discovers it)
+    chain: [0, 0, 1, 0],
+    followChord: [false, false, false, false, false, false, false, true],
+    melodyKey: { 7: 'A minor' },
+    banks: [
+      {
+        chord: { root: 'A', type: 'm7' },
+        patterns: [
+          row([2,'.','.','.', '.','.',1,'.', 1,'.','.','.', '.','.','.','.']),
+          row(['.','.','.','.', 2,'.','.','.', '.','.','.','.', 2,'.','.','.']),
+          row([1,'.',1,'.', 1,'.',1,'.', 1,'.',1,'.', 1,'.',1,'.']),
+          row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.',1,'.']),
+          row(['.','.',[1,75],'.', '.','.','.','.', '.','.',[1,75],'.', '.','.','.','.']),
+          row([1,'.','.','.', 1,'.','.','.', 1,'.','.','.', 1,'.','.','.']),
+          row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']),
+          // 808 root note A2 (45) on beats 1 and 11 — follow-chord transposes
+          // this down a fifth to D2 when bank B (Dm7) plays.
+          row([2,'.','.','.', '.','.','.','.', '.','.',1,'.', '.','.','.','.'], 45),
+        ],
+      },
+      {
+        chord: { root: 'D', type: 'm7' },
+        // Bank B reuses bank A's grooves; only the 808 pitch shifts via follow-chord.
+        patterns: [
+          row([2,'.','.','.', '.','.',1,'.', 1,'.','.','.', '.','.','.','.']),
+          row(['.','.','.','.', 2,'.','.','.', '.','.','.','.', 2,'.','.','.']),
+          row([1,'.',1,'.', 1,'.',1,'.', 1,'.',1,'.', 1,'.',1,'.']),
+          row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.',1,'.']),
+          row(['.','.',[1,75],'.', '.','.','.','.', '.','.',[1,75],'.', '.','.','.','.']),
+          row([1,'.','.','.', 1,'.','.','.', 1,'.','.','.', 1,'.','.','.']),
+          row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']),
+          row([2,'.','.','.', '.','.','.','.', '.','.',1,'.', '.','.','.','.'], 45),
+        ],
+      },
     ],
   },
 
@@ -147,16 +180,38 @@ const PRESETS = {
     bpm: 140,
     swing: 0,
     reverbAmount: 0.22,
-    patterns: [
-      row([2,'.','.','.', '.','.',1,'.', '.','.',1,'.', '.','.','.','.']),                                // kick
-      row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']),                              // snare
-      row([1,[1,75],1,[1,50], 1,[1,75],1,[1,75], 1,[1,50],1,[1,75], 1,[1,75],[1,50],[1,75]]),             // chh rolls
-      row(['.','.','.','.', '.','.','.','.', '.','.',1,'.', '.','.','.','.']),                            // ohh
-      row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']),                              // clap
-      row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.',1,'.']),                            // snap (decorative)
-      // 808 with syncopated pitched line: root (0), +5, +7 → C2, F2, G2
-      row([[2,100,0],'.','.','.', '.','.',[1,100,3],'.', '.','.',[1,100,5],'.', '.','.','.','.'], 36),
-      row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']),                          // riser (empty by default)
+    chain: [0, 0, 1, 1],
+    followChord: [false, false, false, false, false, false, true, false],
+    melodyKey: { 6: 'F minor' },
+    banks: [
+      {
+        chord: { root: 'F', type: 'minor' },
+        patterns: [
+          row([2,'.','.','.', '.','.',1,'.', '.','.',1,'.', '.','.','.','.']),
+          row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']),
+          row([1,[1,75],1,[1,50], 1,[1,75],1,[1,75], 1,[1,50],1,[1,75], 1,[1,75],[1,50],[1,75]]),
+          row(['.','.','.','.', '.','.','.','.', '.','.',1,'.', '.','.','.','.']),
+          row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']),
+          row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.',1,'.']),
+          // 808 root F2 (41) with a +5 (Bb) accent — follow-chord drops it to
+          // C2 on bank B (Cm) for the i-V relationship.
+          row([[2,100,0],'.','.','.', '.','.',[1,100,5],'.', '.','.',[1,100,0],'.', '.','.','.','.'], 41),
+          row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']),
+        ],
+      },
+      {
+        chord: { root: 'C', type: 'minor' },
+        patterns: [
+          row([2,'.','.','.', '.','.',1,'.', '.','.',1,'.', '.','.','.','.']),
+          row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']),
+          row([1,[1,75],1,[1,50], 1,[1,75],1,[1,75], 1,[1,50],1,[1,75], 1,[1,75],[1,50],[1,75]]),
+          row(['.','.','.','.', '.','.','.','.', '.','.',1,'.', '.','.','.','.']),
+          row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']),
+          row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.',1,'.']),
+          row([[2,100,0],'.','.','.', '.','.',[1,100,5],'.', '.','.',[1,100,0],'.', '.','.','.','.'], 41),
+          row(['.','.','.','.', '.','.','.','.', '.','.','.','.', '.','.','.','.']),
+        ],
+      },
     ],
   },
 
@@ -165,15 +220,39 @@ const PRESETS = {
     bpm: 124,
     swing: 0,
     reverbAmount: 0.20,
-    patterns: [
-      row([2,'.','.','.', 1,'.','.','.', 1,'.','.','.', 1,'.','.','.']),                                  // kick 4/4
-      row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 2,'.','.','.']),                              // clap
-      row(['.','.',1,'.', '.','.',1,'.', '.','.',1,'.', '.','.',1,'.']),                                  // chh off-beats
-      row(['.','.','.','.', '.','.',1,'.', '.','.','.','.', '.','.',1,'.']),                              // ohh
-      row([1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1]),                                                          // shaker
-      row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']),                              // tambourine
-      row(['.','.','.','.', '.','.',1,'.', '.','.','.','.', '.','.',1,'.'], 48),                          // chord-stab off-beats
-      row([1,'.','.','.', '.','.','.','.', 1,'.','.','.', '.','.','.','.'], 36),                          // sub-bass on 1 and 9
+    chain: [0, 1, 0, 1],
+    followChord: [false, false, false, false, false, false, false, true],
+    melodyKey: { 7: 'A minor' },
+    banks: [
+      {
+        chord: { root: 'A', type: 'm7' },
+        patterns: [
+          row([2,'.','.','.', 1,'.','.','.', 1,'.','.','.', 1,'.','.','.']),
+          row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 2,'.','.','.']),
+          row(['.','.',1,'.', '.','.',1,'.', '.','.',1,'.', '.','.',1,'.']),
+          row(['.','.','.','.', '.','.',1,'.', '.','.','.','.', '.','.',1,'.']),
+          row([1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1]),
+          row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']),
+          // Chord stab fires off-beats — the chord it plays comes from the
+          // bank, not the slot. The note here is just a placeholder pitch.
+          row(['.','.',1,'.', '.','.',1,'.', '.','.',1,'.', '.','.',1,'.'], 48),
+          // Sub-bass root A2 (45); bank B (Fmaj7) transposes to F2 via follow-chord.
+          row([1,'.','.','.', '.','.','.','.', 1,'.','.','.', '.','.','.','.'], 45),
+        ],
+      },
+      {
+        chord: { root: 'F', type: 'maj7' },
+        patterns: [
+          row([2,'.','.','.', 1,'.','.','.', 1,'.','.','.', 1,'.','.','.']),
+          row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 2,'.','.','.']),
+          row(['.','.',1,'.', '.','.',1,'.', '.','.',1,'.', '.','.',1,'.']),
+          row(['.','.','.','.', '.','.',1,'.', '.','.','.','.', '.','.',1,'.']),
+          row([1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1]),
+          row(['.','.','.','.', 1,'.','.','.', '.','.','.','.', 1,'.','.','.']),
+          row(['.','.',1,'.', '.','.',1,'.', '.','.',1,'.', '.','.',1,'.'], 48),
+          row([1,'.','.','.', '.','.','.','.', 1,'.','.','.', '.','.','.','.'], 45),
+        ],
+      },
     ],
   },
 };
@@ -248,28 +327,51 @@ function recomputeTargetsForSlots(prevTargets, prevSlots, newSlots) {
   return t;
 }
 
-function bankFromPreset(name) {
-  const preset = PRESETS[name];
-  if (!preset) return emptyBank();
+// Build a single bank from a preset's bank entry. Each entry has a chord +
+// per-slot patterns. Slot loadout/mix/config come from the preset's kit; the
+// preset's followChord and melodyKey lists flag specific slots as chord-followers.
+function buildPresetBank(preset, bankEntry) {
   const kit = getKit(preset.kitId) ?? { slots: DEFAULT_LOADOUT.slice() };
+  const followChord = preset.followChord || [];
+  const melodyKey = preset.melodyKey || {};
   const slots = slotsFromKit(kit, null, false).map((s, i) => {
-    const pat = preset.patterns[i] || EMPTY_ROW();
+    const pat = bankEntry.patterns[i] || EMPTY_ROW();
     const next = { ...s, pattern: pat.map(c => ({ ...c })) };
     if (isPitched(s.sound)) {
       for (let j = 0; j < 16; j++) {
         if (next.pattern[j].on && next.pattern[j].note == null) next.pattern[j].note = s.defaultNote;
       }
     }
+    if (followChord[i]) next.followChord = true;
+    if (melodyKey[i]) next.melodyKey = melodyKey[i];
     return next;
   });
-  return { slots, swing: preset.swing, reverbAmount: preset.reverbAmount };
+  return {
+    slots,
+    swing: preset.swing,
+    reverbAmount: preset.reverbAmount,
+    chord: bankEntry.chord ? { ...bankEntry.chord } : { ...DEFAULT_BANK_CHORD },
+  };
+}
+
+// Build the full {banks[4], chain, swing, reverbAmount, kitId} state for a
+// preset. The chain references the preset's bank indices (0/1); we map those
+// into banks slots A/B leaving C/D empty.
+function bankFromPreset(name) {
+  const preset = PRESETS[name];
+  if (!preset) return emptyBank();
+  // Legacy single-bank fallback for any preset that hasn't been updated
+  if (!preset.banks && preset.patterns) {
+    return buildPresetBank(preset, { patterns: preset.patterns });
+  }
+  return buildPresetBank(preset, preset.banks[0]);
 }
 
 // ============================================================
 // Sub-components
 // ============================================================
 
-function BankBar({ banks, editBank, playingBank, isPlaying, onSelect }) {
+function BankBar({ banks, editBank, playingBank, isPlaying, onSelect, onChordClick }) {
   return (
     <div className="bankbar">
       <div className="band-label">BANKS</div>
@@ -278,16 +380,24 @@ function BankBar({ banks, editBank, playingBank, isPlaying, onSelect }) {
           const isEditing = i === editBank;
           const isPlayingHere = isPlaying && i === playingBank;
           const populated = banks[i].slots.some(s => s.pattern.some(c => c.on));
+          const chord = banks[i].chord;
+          const label = chord ? chordLabel(chord) : '';
           return (
-            <button
-              key={letter}
-              className={`bank ${isEditing ? 'editing' : ''} ${isPlayingHere ? 'playing' : ''} ${populated ? 'populated' : ''}`}
-              onClick={() => onSelect(i)}
-              title={`Bank ${letter}${isEditing ? ' (editing)' : ''}${isPlayingHere ? ' · playing' : ''}`}
-            >
-              <span className="bank-letter">{letter}</span>
-              <span className="bank-play-led" />
-            </button>
+            <div key={letter} className="bank-cell">
+              <button
+                className={`bank ${isEditing ? 'editing' : ''} ${isPlayingHere ? 'playing' : ''} ${populated ? 'populated' : ''}`}
+                onClick={() => onSelect(i)}
+                title={`Bank ${letter}${chord ? ` · ${label}` : ''}${isEditing ? ' (editing)' : ''}${isPlayingHere ? ' · playing' : ''}`}
+              >
+                <span className="bank-letter">{letter}</span>
+                <span className="bank-play-led" />
+              </button>
+              <button
+                className={`bank-chord-badge ${chord ? '' : 'unset'}`}
+                onClick={(e) => onChordClick(i, e.currentTarget)}
+                title={chord ? `Bank ${letter} chord: ${label} — click to change` : 'No chord set — click to add'}
+              >{label || '—'}</button>
+            </div>
           );
         })}
       </div>
@@ -503,6 +613,7 @@ function App() {
   const [notePicker, setNotePicker] = useState(null);
   const [slotSettings, setSlotSettings] = useState(null);
   const [kitsPopover, setKitsPopover] = useState(null);
+  const [bankChordPopover, setBankChordPopover] = useState(null);
 
   const engineRef = useRef(null);
   const rafRef = useRef(null);
@@ -746,7 +857,13 @@ function App() {
   };
   const setSlotMelody = (slotIdx, melody) => updateSlot(slotIdx, s => ({ ...s, melody }));
   const setSlotMelKey = (slotIdx, key) => updateSlot(slotIdx, s => ({ ...s, melodyKey: key }));
+  const toggleSlotFollowChord = (slotIdx) => updateSlot(slotIdx, s => ({ ...s, followChord: !s.followChord }));
   const setBankReverbAmount = (v) => updateEditBank(b => ({ ...b, reverbAmount: v }));
+  // Per-bank chord setter. `idx` is the bank index (0-3), not necessarily the
+  // edit bank — the popover can target any bank.
+  const setBankChord = (idx, chord) => {
+    setBanks(prev => prev.map((b, i) => (i === idx ? { ...b, chord } : b)));
+  };
   const setBankSwing = (v) => updateEditBank(b => ({ ...b, swing: Math.round(Math.max(0, Math.min(66, v))) }));
 
   const assignSlotSound = (slotIdx, soundKey) => {
@@ -780,8 +897,16 @@ function App() {
     const preset = PRESETS[name];
     if (!preset) return;
     const prevSlots = bank.slots;
-    const nb = bankFromPreset(name);
-    setBanks(prev => prev.map((b, i) => (i === editBank ? nb : b)));
+    // Multi-bank presets: build each bank from its entry, fill remaining slots
+    // with empty banks. Edit bank moves to A and chain comes from the preset.
+    const presetBanks = (preset.banks || [{ patterns: preset.patterns }]);
+    const newBanks = [emptyBank(), emptyBank(), emptyBank(), emptyBank()];
+    for (let i = 0; i < Math.min(presetBanks.length, 4); i++) {
+      newBanks[i] = buildPresetBank(preset, presetBanks[i]);
+    }
+    setBanks(newBanks);
+    setEditBank(0);
+    setChain(preset.chain ?? [0]);
     setBpmState(preset.bpm);
     setActivePreset(name);
     setCurrentKit(preset.kitId);
@@ -791,7 +916,7 @@ function App() {
       ...prev,
       sidechain: {
         ...prev.sidechain,
-        targets: recomputeTargetsForSlots(prev.sidechain.targets, prevSlots, nb.slots),
+        targets: recomputeTargetsForSlots(prev.sidechain.targets, prevSlots, newBanks[0].slots),
       },
     }));
   };
@@ -1042,6 +1167,7 @@ function App() {
           playingBank={playingBankIdx}
           isPlaying={playing}
           onSelect={selectBank}
+          onChordClick={(bankIdx, anchor) => setBankChordPopover({ bankIdx, anchor })}
         />
         <ChainEditor
           chain={chain}
@@ -1122,6 +1248,15 @@ function App() {
                       onClick={() => toggleSlotMute(ri)}
                       aria-label="Mute"
                     >M</button>
+                    {pitched && slot.sound !== 'chord-stab' && (
+                      <button
+                        className={`follow-btn ${slot.followChord ? 'on' : ''}`}
+                        onClick={() => toggleSlotFollowChord(ri)}
+                        title={slot.followChord
+                          ? 'FOLLOW on — notes transpose with the bank\'s chord root'
+                          : 'FOLLOW off — notes play their literal pitches'}
+                      >♪→C</button>
+                    )}
                     {pitched && (
                       <button
                         className={`mel-btn ${slot.melody ? 'on' : ''}`}
@@ -1257,6 +1392,15 @@ function App() {
           currentKitId={kitModified ? null : currentKit}
           onPick={loadKit}
           onClose={() => setKitsPopover(null)}
+        />
+      )}
+      {bankChordPopover && (
+        <BankChordPopover
+          anchor={bankChordPopover.anchor}
+          bankLetter={BANK_LETTERS[bankChordPopover.bankIdx]}
+          chord={banks[bankChordPopover.bankIdx].chord ?? { ...DEFAULT_BANK_CHORD }}
+          onChange={(c) => setBankChord(bankChordPopover.bankIdx, c)}
+          onClose={() => setBankChordPopover(null)}
         />
       )}
       {importOpen && (

@@ -3,6 +3,19 @@
 
 import { VOICES, triggerSample } from './voices.js';
 import { isContinuous } from './sounds.js';
+import { SCALES, rootSemitone, chordRootMidi, DEFAULT_MELODY_KEY } from './scales.js';
+
+// Compute the semitone offset that a follow-chord pitched slot should apply to
+// every note it plays, given the bank's chord. Returns 0 when the bank has no
+// chord (v4 compatibility) or when the slot doesn't follow.
+function chordTransposeOffset(slot, bank) {
+  if (!slot || !slot.followChord || !bank?.chord) return 0;
+  const keyName = slot.melodyKey || DEFAULT_MELODY_KEY;
+  const slotRoot = SCALES[keyName]?.root ?? 9;
+  const bankRoot = rootSemitone(bank.chord.root);
+  if (bankRoot == null) return 0;
+  return bankRoot - slotRoot;
+}
 
 export const SLOT_COUNT = 8;
 const SLOT_INDICES = Array.from({ length: SLOT_COUNT }, (_, i) => i);
@@ -124,7 +137,7 @@ function computeGlideSource(slot) {
   return out;
 }
 
-function triggerSlot(routing, slotIdx, time, cell, slot, samples, barSec) {
+function triggerSlot(routing, slotIdx, time, cell, slot, samples, barSec, bank) {
   if (slot.mute) return;
   const velocity = cell.velocity ?? 1;
   const velGain = VEL_GAIN[velocity] ?? 0.85;
@@ -137,11 +150,34 @@ function triggerSlot(routing, slotIdx, time, cell, slot, samples, barSec) {
   }
   const fn = VOICES[slot.sound];
   if (!fn) return;
+
+  // v5 chord routing:
+  //   - chord-stab plays the bank's chord (root + type), voiced in the C4
+  //     octave. When the bank has no chord (v4 import path), fall back to the
+  //     slot's legacy chordType + defaultNote.
+  //   - Pitched slots with followChord=true transpose every note by
+  //     (bankRoot - slotMelodyKeyRoot) semitones. chord-stab skips this
+  //     because its pitch is fully determined by the bank chord.
+  let note = cell.note ?? slot.defaultNote;
+  let chord = slot.chordType;
+  let fromPitch = cell.__fromPitch ?? null;
+  if (slot.sound === 'chord-stab' && bank?.chord) {
+    note = chordRootMidi(rootSemitone(bank.chord.root) ?? 0);
+    chord = bank.chord.type;
+    fromPitch = null; // bank chord change doesn't glide
+  } else if (slot.followChord && bank?.chord && slot.sound !== 'chord-stab') {
+    const offset = chordTransposeOffset(slot, bank);
+    if (offset !== 0) {
+      note = note + offset;
+      if (fromPitch != null) fromPitch = fromPitch + offset;
+    }
+  }
+
   fn(routing.ctx, time, velocity, dest, {
-    note: cell.note ?? slot.defaultNote,
-    fromPitch: cell.__fromPitch ?? null,
+    note,
+    fromPitch,
     filter: slot.filter,
-    chord: slot.chordType,
+    chord,
     tunable: slot.tunable,
     lengthSec: cell.__lengthSec ?? null,
     barSec,
@@ -456,7 +492,7 @@ class DrumEngine {
             note: n.pitch ?? slot.defaultNote,
             __lengthSec: lengthSec,
           };
-          triggerSlot(this.routing, slotIdx, noteTime, cell, slot, this.samples, barSec);
+          triggerSlot(this.routing, slotIdx, noteTime, cell, slot, this.samples, barSec, bank);
         }
         continue;
       }
@@ -468,7 +504,7 @@ class DrumEngine {
       const augmented = glideSource && glideSource[step] != null
         ? { ...cell, __fromPitch: glideSource[step] }
         : cell;
-      triggerSlot(this.routing, slotIdx, triggerTime, augmented, slot, this.samples, barSec);
+      triggerSlot(this.routing, slotIdx, triggerTime, augmented, slot, this.samples, barSec, bank);
     }
     this.queue.push({ step, chainIdx, time: baseTime });
     if (this.queue.length > 64) this.queue.shift();
@@ -630,7 +666,7 @@ async function renderOffline({ banks, chain, bpm, delayFeedback, delayTime, samp
             const requested = Math.max(1, (n.length | 0));
             const lengthSec = Math.min(requested, 16 - noteStep) * sixteenth;
             const cell = { on: true, velocity: n.velocity ?? 1, probability: n.probability ?? 100, note: n.pitch ?? slot.defaultNote, __lengthSec: lengthSec };
-            triggerSlot(routing, slotIdx, noteTime, cell, slot, localSamples, barSec);
+            triggerSlot(routing, slotIdx, noteTime, cell, slot, localSamples, barSec, bank);
             hitCount++;
           }
           continue;
@@ -643,7 +679,7 @@ async function renderOffline({ banks, chain, bpm, delayFeedback, delayTime, samp
         const augmented = glideMap[slotIdx] && glideMap[slotIdx][step] != null
           ? { ...cell, __fromPitch: glideMap[slotIdx][step] }
           : cell;
-        triggerSlot(routing, slotIdx, t, augmented, slot, localSamples, barSec);
+        triggerSlot(routing, slotIdx, t, augmented, slot, localSamples, barSec, bank);
         hitCount++;
       }
     }

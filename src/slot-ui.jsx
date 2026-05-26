@@ -3,6 +3,7 @@ import {
   PALETTE, CATEGORIES, CHORD_TYPES,
   isPitched, hasFilter, hasChord, tunableValues, isContinuous, hasFilterEnv, noteLabel,
 } from './sounds.js';
+import { ROOT_NAMES_SHARP, CHORD_TYPES_V5, chordLabel } from './scales.js';
 import { KITS } from './kits.js';
 
 // Position a popover near an anchor element, clamped to the viewport.
@@ -101,6 +102,44 @@ export function PalettePopover({ slotIdx, currentSound, anchor, onPick, onClose 
         })}
         {totalVisible === 0 && <div className="popover-empty">No sounds match "{query}".</div>}
       </div>
+    </div>
+  );
+}
+
+export function BankChordPopover({ anchor, bankLetter, chord, onChange, onClose }) {
+  const ref = useRef(null);
+  useEffect(() => { placeBelow(anchor, ref.current); }, [anchor]);
+  useOutsideClose(ref, onClose);
+  const root = chord?.root ?? 'A';
+  const type = chord?.type ?? 'minor';
+  return (
+    <div className="popover bank-chord-popover" ref={ref}>
+      <div className="popover-header">BANK {bankLetter} · CHORD {chordLabel({ root, type })}</div>
+      <div className="bank-chord-section">
+        <div className="bank-chord-label">ROOT</div>
+        <div className="bank-chord-roots">
+          {ROOT_NAMES_SHARP.map(r => (
+            <button
+              key={r}
+              className={`bank-chord-root ${r === root ? 'on' : ''}`}
+              onClick={() => onChange({ root: r, type })}
+            >{r}</button>
+          ))}
+        </div>
+      </div>
+      <div className="bank-chord-section">
+        <div className="bank-chord-label">TYPE</div>
+        <div className="bank-chord-types">
+          {CHORD_TYPES_V5.map(t => (
+            <button
+              key={t}
+              className={`bank-chord-type ${t === type ? 'on' : ''}`}
+              onClick={() => onChange({ root, type: t })}
+            >{t}</button>
+          ))}
+        </div>
+      </div>
+      <div className="popover-footnote">chord-stab plays this; pitched slots with FOLLOW transpose to match</div>
     </div>
   );
 }
